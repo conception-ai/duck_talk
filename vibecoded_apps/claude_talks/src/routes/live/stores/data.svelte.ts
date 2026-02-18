@@ -139,7 +139,14 @@ export function createDataStore(deps: DataStoreDeps) {
   }
 
   function snapshotUtterance() {
-    return { transcription: pendingInput, audioChunks: [...audioBuffer] };
+    let prior = '';
+    for (let i = turns.length - 1; i >= 0; i--) {
+      if (turns[i].role === 'user') { prior = turns[i].text; break; }
+    }
+    const full = prior
+      ? (prior + ' ' + pendingInput).trim()
+      : pendingInput.trim();
+    return { transcription: full, audioChunks: [...audioBuffer] };
   }
 
   function holdForApproval(

@@ -24,6 +24,10 @@ Your code must be clean, minimalist and easy to read.
 | @vibecoded_apps/claude_talks/src/routes/live/models.ts | Shared types (SessionInfo) |
 | @vibecoded_apps/claude_talks/src/routes/live/tools.ts | Gemini function declarations + handlers |
 
+## Guiding Principles
+
+- **Clean data flows**: Raw signals (STT chunks, VAD events) must be merged into clean domain objects at the store level. Consumers (UI, corrections, API calls) should never reconstruct or re-derive from raw data. Fix the source, not each consumer. Leverage Svelte's reactivity: one clean `$state` → many `$derived` readers.
+
 ## Gotchas
 
 - **Gemini Live**: use `types.LiveConnectConfig` + `types.Modality.AUDIO` (not raw dicts). `model_turn.parts` can be `None`. File input needs chunking + `audio_stream_end=True`.
