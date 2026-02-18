@@ -33,6 +33,7 @@ Your code must be clean, minimalist and easy to read.
 
 - **Gemini Live**: use `types.LiveConnectConfig` + `types.Modality.AUDIO` (not raw dicts). `model_turn.parts` can be `None`. File input needs chunking + `audio_stream_end=True`.
 - **Function calling**: `tools.ts` declares `TOOLS` (uses `Type` enum from SDK) + `handleToolCall()` (pure fetch). The `converse` tool is `NON_BLOCKING` + `SILENT` response — Gemini speaks an acknowledgment while Claude streams in the background. Chunks are fed back via `sendClientContent` so Gemini reads them aloud. The handler lives in `gemini.ts` (not `tools.ts`) because it needs the session ref.
+- **Converse phase gating** (`gemini.ts`): A `conversePhase` state machine (`idle` → `suppressing` → `relaying` → `idle`) gates both audio and text during converse. Key non-obvious timing: Gemini sends "Asking Claude" audio/text BEFORE the `toolCall` message arrives, so the ack naturally passes through while `conversePhase` is still `idle`. After the tool call, `suppressing` blocks Gemini's own audio + flushes the player. On first `sendClientContent` (Claude chunk), `relaying` re-enables audio (Gemini reads Claude aloud) but keeps blocking `outputTranscription` (the `[CLAUDE]:` echo is noise — Claude's text is already in `pendingTool.text` via `appendTool`). `holdForApproval` takes an optional `cancel` callback to reset the phase on reject.
 - **Svelte app**: Gemini API key is stored client-side in `localStorage` (`claude-talks:ui`), managed via modal in `ui.svelte.ts`. Flows through DI: `ui.apiKey` → `data.svelte.ts` (`getApiKey` dep) → `gemini.ts` (`ConnectDeps.apiKey`). Modal auto-opens on first visit if no key is set.
 - **Claude SDK isolation**: The SDK subprocess must be fully isolated from the parent Claude Code session. Three layers:
   1. `os.environ.pop("CLAUDECODE", None)` at import time — prevents "nested session" error
@@ -45,7 +46,7 @@ Your code must be clean, minimalist and easy to read.
 - **Learning mode**: `learningMode` toggle in ui store. When on, `converse` tool calls are held for user approval (Accept/Edit/Reject) instead of executing immediately. Corrections are persisted in `corrections.svelte.ts` (localStorage `claude-talks:corrections`) and injected into Gemini's `systemInstruction` via `buildSystemPrompt()` on next session connect. Key details:
   - `snapshotUtterance()` must be called BEFORE `commitTurn()` in `gemini.ts` — it captures the full merged user text (prior committed user turns + current `pendingInput`) and audio buffer.
   - `commitTurn()` merges consecutive user turns (VAD fires multiple interrupts per utterance) and clears `pendingInput`/`audioBuffer`.
-  - `appendOutput` is suppressed during active converse tools (post-tool outputTranscription is noise).
+  - Audio/text suppression during converse is handled by `conversePhase` in `gemini.ts` (not in the store). See **Converse phase gating** above.
   - Approval UI is embedded in the last user turn bubble (not a separate element).
 
 ## Locations & commands

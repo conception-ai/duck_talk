@@ -66,6 +66,7 @@ export interface DataStoreMethods {
   holdForApproval(
     approval: PendingApproval,
     execute: (instruction: string) => void,
+    cancel?: () => void,
   ): void;
 }
 

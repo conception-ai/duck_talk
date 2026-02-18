@@ -38,9 +38,9 @@ export function createDataStore(deps: DataStoreDeps) {
   let pendingOutput = $state('');
   let pendingTool = $state<PendingTool | null>(null);
   let awaitingToolDone = false; // not reactive — internal flag only
-  let converseAckDone = false; // gate: suppress output after Gemini's acknowledgment is committed
   let pendingApproval = $state<PendingApproval | null>(null);
   let pendingExecute: ((instruction: string) => void) | null = null;
+  let pendingCancel: (() => void) | null = null;
 
   // --- Audio buffer (for STT corrections) ---
   let audioBuffer: RecordedChunk[] = [];
@@ -59,14 +59,12 @@ export function createDataStore(deps: DataStoreDeps) {
   }
 
   function appendOutput(text: string) {
-    if (pendingTool?.name === 'converse' && converseAckDone) return;
     pendingOutput += text;
   }
 
   function startTool(name: string, args: Record<string, unknown>) {
     pendingTool = { name, args, text: '', streaming: true };
     awaitingToolDone = false;
-    converseAckDone = false;
   }
 
   function appendTool(text: string) {
@@ -83,10 +81,6 @@ export function createDataStore(deps: DataStoreDeps) {
   }
 
   function commitTurn() {
-    // After first commit with active converse tool, suppress further output
-    // (Gemini's acknowledgment is already in pendingOutput; subsequent output is echo noise)
-    if (pendingTool?.name === 'converse') converseAckDone = true;
-
     // Always flush user input
     const userText = pendingInput.trim();
     if (userText) {
@@ -158,9 +152,11 @@ export function createDataStore(deps: DataStoreDeps) {
   function holdForApproval(
     approval: PendingApproval,
     execute: (instruction: string) => void,
+    cancel?: () => void,
   ) {
     pendingApproval = approval;
     pendingExecute = execute;
+    pendingCancel = cancel ?? null;
   }
 
   function approve(editedText?: string) {
@@ -180,11 +176,14 @@ export function createDataStore(deps: DataStoreDeps) {
     pendingExecute(instruction);
     pendingApproval = null;
     pendingExecute = null;
+    pendingCancel = null;
   }
 
   function reject() {
     pendingApproval = null;
     pendingExecute = null;
+    pendingCancel?.();
+    pendingCancel = null;
     finishTool();
   }
 

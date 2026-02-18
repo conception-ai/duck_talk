@@ -68,6 +68,8 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
 
   // Mutable ref — handleMessage closes over this, assigned after connect().
   let sessionRef: Session | null = null;
+  // Converse phase: idle → suppressing (tool call) → relaying (1st Claude chunk) → idle (done)
+  let conversePhase: 'idle' | 'suppressing' | 'relaying' = 'idle';
 
   async function handleMessage(message: LiveServerMessage) {
     console.log(`[${tag}] message:`, JSON.stringify(message).slice(0, 300));
@@ -84,6 +86,9 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
         data.startTool(fc.name!, fc.args ?? {});
 
         if (fc.name === 'converse') {
+          conversePhase = 'suppressing';
+          player.flush();
+
           // Always send SILENT response so Gemini keeps talking
           sessionRef?.sendToolResponse({
             functionResponses: [
@@ -109,6 +114,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
                 );
                 data.appendTool(text);
                 if (sessionRef) {
+                  if (conversePhase === 'suppressing') conversePhase = 'relaying';
                   sessionRef.sendClientContent({
                     turns: [
                       { role: 'user', parts: [{ text: `[CLAUDE]: ${text}` }] },
@@ -120,9 +126,11 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
                 }
               },
               onDone() {
+                conversePhase = 'idle';
                 data.finishTool();
               },
               onError(msg) {
+                conversePhase = 'idle';
                 data.finishTool();
                 data.pushError(msg);
               },
@@ -140,6 +148,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
                 audioChunks: utterance.audioChunks,
               },
               executeConverse,
+              () => { conversePhase = 'idle'; },
             );
           } else {
             // Normal mode: execute immediately
@@ -171,11 +180,18 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
     }
 
     if (sc.inputTranscription?.text) data.appendInput(sc.inputTranscription.text);
-    if (sc.outputTranscription?.text) data.appendOutput(sc.outputTranscription.text);
+
+    // Suppress Gemini's output text during converse (ack arrives pre-tool-call, passes through)
+    if (sc.outputTranscription?.text && conversePhase === 'idle') {
+      data.appendOutput(sc.outputTranscription.text);
+    }
 
     if (sc.modelTurn?.parts) {
       for (const part of sc.modelTurn.parts) {
-        if (part.inlineData?.data) player.play(part.inlineData.data);
+        // Suppress Gemini's own audio between tool call and first Claude chunk
+        if (part.inlineData?.data && conversePhase !== 'suppressing') {
+          player.play(part.inlineData.data);
+        }
       }
     }
 
