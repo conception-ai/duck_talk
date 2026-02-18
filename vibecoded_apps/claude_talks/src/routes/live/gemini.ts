@@ -102,6 +102,7 @@ interface ConnectDeps {
   apiKey: string;
   getLearningMode: () => boolean;
   corrections: Correction[];
+  pttMode: boolean;
 }
 
 /**
@@ -295,6 +296,11 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
         systemInstruction: systemPrompt,
         inputAudioTranscription: {},
         outputAudioTranscription: {},
+        ...(deps.pttMode && {
+          realtimeInputConfig: {
+            automaticActivityDetection: { disabled: true },
+          },
+        }),
       },
       callbacks: {
         onopen: () => {
@@ -315,7 +321,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
     sessionRef = session;
 
     return {
-      sendRealtimeInput: (audio) => session.sendRealtimeInput({ audio }),
+      sendRealtimeInput: (input) => session.sendRealtimeInput(input),
       sendClientContent: (content) => session.sendClientContent(content),
       sendToolResponse: (response) =>
         session.sendToolResponse(response as LiveSendToolResponseParameters),

@@ -11,6 +11,7 @@ interface Persisted {
   voiceEnabled: boolean;
   apiKey: string | null;
   learningMode: boolean;
+  pttMode: boolean;
 }
 
 function load(): Persisted {
@@ -18,7 +19,7 @@ function load(): Persisted {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch { /* corrupted — fall through to default */ }
-  return { voiceEnabled: true, apiKey: null, learningMode: false };
+  return { voiceEnabled: true, apiKey: null, learningMode: false, pttMode: false };
 }
 
 function save(state: Persisted) {
@@ -31,9 +32,10 @@ export function createUIStore() {
   let apiKey = $state<string | null>(persisted.apiKey);
   let apiKeyModalOpen = $state(!apiKey);
   let learningMode = $state(persisted.learningMode);
+  let pttMode = $state(persisted.pttMode);
 
   function persist() {
-    save({ voiceEnabled, apiKey, learningMode });
+    save({ voiceEnabled, apiKey, learningMode, pttMode });
   }
 
   function toggleVoice() {
@@ -43,6 +45,11 @@ export function createUIStore() {
 
   function toggleLearningMode() {
     learningMode = !learningMode;
+    persist();
+  }
+
+  function togglePttMode() {
+    pttMode = !pttMode;
     persist();
   }
 
@@ -67,8 +74,10 @@ export function createUIStore() {
     get apiKey() { return apiKey; },
     get apiKeyModalOpen() { return apiKeyModalOpen; },
     get learningMode() { return learningMode; },
+    get pttMode() { return pttMode; },
     toggleVoice,
     toggleLearningMode,
+    togglePttMode,
     setApiKey,
     openApiKeyModal,
     closeApiKeyModal,

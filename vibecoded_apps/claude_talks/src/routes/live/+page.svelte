@@ -26,6 +26,7 @@
     getApiKey: () => ui.apiKey,
     getLearningMode: () => ui.learningMode,
     getCorrections: () => corrections.corrections,
+    getPttMode: () => ui.pttMode,
   });
 
   let keyDraft = $state(ui.apiKey ?? '');
@@ -109,6 +110,10 @@
     <button class="header-sm" class:active-mode={ui.learningMode} onclick={ui.toggleLearningMode}>
       {ui.learningMode ? 'Learning' : 'Direct'}
     </button>
+    <button class="header-sm" class:active-mode={ui.pttMode} onclick={ui.togglePttMode}
+      disabled={live.status !== 'idle'}>
+      {ui.pttMode ? 'PTT' : 'VAD'}
+    </button>
     {#if corrections.corrections.length}
       <button class="header-sm" onclick={() => { correctionsModalOpen = true; }}>
         Corrections ({corrections.corrections.length})
@@ -130,6 +135,15 @@
       <button onclick={live.stop}>Stop</button>
     {/if}
   </header>
+
+  {#if live.status === 'connected' && ui.pttMode}
+    <button class="ptt-button" class:ptt-active={live.pttActive}
+      onpointerdown={live.pttPress}
+      onpointerup={live.pttRelease}
+      onpointerleave={live.pttRelease}>
+      {live.pttActive ? 'Listening...' : 'Hold to Talk'}
+    </button>
+  {/if}
 
   <div class="messages">
     {#each live.turns as turn, i}
@@ -520,5 +534,20 @@
     color: #9ca3af;
     font-size: 0.85rem;
     text-align: center;
+  }
+
+  .ptt-button {
+    width: 100%;
+    padding: 1.5rem;
+    font-size: 1.1rem;
+    margin-bottom: 1rem;
+    user-select: none;
+    touch-action: none;
+  }
+
+  .ptt-button.ptt-active {
+    color: #059669;
+    border-color: #059669;
+    background: #ecfdf5;
   }
 </style>

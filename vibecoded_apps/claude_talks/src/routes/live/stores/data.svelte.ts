@@ -26,6 +26,7 @@ interface DataStoreDeps {
   getApiKey: () => string | null;
   getLearningMode: () => boolean;
   getCorrections: () => Correction[];
+  getPttMode: () => boolean;
 }
 
 export function createDataStore(deps: DataStoreDeps) {
@@ -41,6 +42,10 @@ export function createDataStore(deps: DataStoreDeps) {
   let pendingApproval = $state<PendingApproval | null>(null);
   let pendingExecute: ((instruction: string) => void) | null = null;
   let pendingCancel: (() => void) | null = null;
+
+  // --- PTT state ---
+  let pttMode = false;              // set at start(), gates mic callback
+  let pttActive = $state(false);    // reactive — UI shows button state
 
   // --- Audio buffer (for STT corrections) ---
   let audioBuffer: RecordedChunk[] = [];
@@ -208,6 +213,8 @@ export function createDataStore(deps: DataStoreDeps) {
       pushError('API key not set. Click "API Key" to configure.');
       return;
     }
+    pttMode = deps.getPttMode();
+    pttActive = false;
     sessionStart = Date.now();
     audioBuffer = [];
     player = audio.createPlayer();
@@ -219,16 +226,17 @@ export function createDataStore(deps: DataStoreDeps) {
       apiKey,
       getLearningMode: deps.getLearningMode,
       corrections: deps.getCorrections(),
+      pttMode,
     });
     if (!backend) return;
 
     try {
       console.log('[live] starting mic...');
       mic = await audio.startMic((base64) => {
+        if (pttMode && !pttActive) return;
         audioBuffer.push({ ts: Date.now() - sessionStart, data: base64 });
         backend?.sendRealtimeInput({
-          data: base64,
-          mimeType: 'audio/pcm;rate=16000',
+          audio: { data: base64, mimeType: 'audio/pcm;rate=16000' },
         });
       });
       console.log('[live] mic started');
@@ -240,6 +248,8 @@ export function createDataStore(deps: DataStoreDeps) {
   }
 
   function stop() {
+    pttActive = false;
+    pttMode = false;
     if (pendingTool?.streaming) pendingTool.streaming = false;
     commitTurn();
     mic?.stop();
@@ -294,6 +304,7 @@ export function createDataStore(deps: DataStoreDeps) {
       apiKey,
       getLearningMode: deps.getLearningMode,
       corrections: deps.getCorrections(),
+      pttMode: false,
     });
     if (!backend) return;
 
@@ -305,8 +316,7 @@ export function createDataStore(deps: DataStoreDeps) {
         if (delay > 0) await new Promise((r) => setTimeout(r, delay));
         audioBuffer.push({ ts: chunk.ts, data: chunk.data });
         backend.sendRealtimeInput({
-          data: chunk.data,
-          mimeType: `audio/pcm;rate=${recording.sampleRate}`,
+          audio: { data: chunk.data, mimeType: `audio/pcm;rate=${recording.sampleRate}` },
         });
         prevTs = chunk.ts;
       }
@@ -316,8 +326,7 @@ export function createDataStore(deps: DataStoreDeps) {
         String.fromCharCode(...new Uint8Array(silenceBytes)),
       );
       backend.sendRealtimeInput({
-        data: silence,
-        mimeType: `audio/pcm;rate=${recording.sampleRate}`,
+        audio: { data: silence, mimeType: `audio/pcm;rate=${recording.sampleRate}` },
       });
       console.log('[replay] all chunks sent + 2s silence');
     } catch (e: unknown) {
@@ -325,6 +334,20 @@ export function createDataStore(deps: DataStoreDeps) {
       pushError(`Replay failed: ${e instanceof Error ? e.message : String(e)}`);
       status = 'idle';
     }
+  }
+
+  // --- PTT lifecycle ---
+
+  function pttPress() {
+    if (!pttMode || !backend) return;
+    pttActive = true;
+    backend.sendRealtimeInput({ activityStart: {} });
+  }
+
+  function pttRelease() {
+    if (!pttMode || !backend) return;
+    pttActive = false;
+    backend.sendRealtimeInput({ activityEnd: {} });
   }
 
   // --- Public surface ---
@@ -336,6 +359,7 @@ export function createDataStore(deps: DataStoreDeps) {
     get pendingOutput() { return pendingOutput; },
     get pendingTool() { return pendingTool; },
     get pendingApproval() { return pendingApproval; },
+    get pttActive() { return pttActive; },
     approve,
     reject,
     start,
@@ -343,5 +367,7 @@ export function createDataStore(deps: DataStoreDeps) {
     startRecording,
     stopRecording,
     startReplay,
+    pttPress,
+    pttRelease,
   };
 }

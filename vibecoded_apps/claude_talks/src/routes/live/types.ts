@@ -89,8 +89,14 @@ export interface AudioPort {
 
 // --- Port: Gemini session backend ---
 
+export interface RealtimeInput {
+  audio?: { data: string; mimeType: string };
+  activityStart?: Record<string, never>;
+  activityEnd?: Record<string, never>;
+}
+
 export interface LiveBackend {
-  sendRealtimeInput(audio: { data: string; mimeType: string }): void;
+  sendRealtimeInput(input: RealtimeInput): void;
   sendClientContent(content: {
     turns: { role: string; parts: { text: string }[] }[];
     turnComplete: boolean;
