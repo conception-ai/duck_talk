@@ -6,7 +6,7 @@ import tempfile
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import cast
+from typing import Union, cast
 
 from claude_agent_sdk import (
     ClaudeAgentOptions,
@@ -41,7 +41,7 @@ class Result:
     duration_ms: int
 
 
-type Chunk = TextDelta | Result
+Chunk = Union[TextDelta, Result]
 
 
 class Claude:
