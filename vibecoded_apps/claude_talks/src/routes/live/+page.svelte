@@ -86,10 +86,15 @@
       <div class="msg {turn.role}">
         <span class="label">{turn.role === 'user' ? 'You' : 'Gemini'}</span>
         {#if turn.text}<p>{turn.text}</p>{/if}
-        {#if turn.tool}
+        {#if turn.toolCall}
           <div class="tool-result">
-            <span class="tool-pill">{turn.tool.name}</span>
-            {#if turn.tool.text}<p class="tool-text">{turn.tool.text}</p>{/if}
+            <span class="tool-pill">{turn.toolCall.name}</span>
+            {#if turn.toolCall.args.instruction}
+              <p class="tool-args">{turn.toolCall.args.instruction}</p>
+            {:else if Object.keys(turn.toolCall.args).length}
+              <p class="tool-args">{JSON.stringify(turn.toolCall.args)}</p>
+            {/if}
+            {#if turn.toolResult}<p class="tool-text">{turn.toolResult}</p>{/if}
           </div>
         {/if}
       </div>
@@ -108,6 +113,11 @@
         {#if live.pendingOutput}<p>{live.pendingOutput}</p>{/if}
         <div class="tool-result streaming">
           <span class="tool-pill">{live.pendingTool.name}</span>
+          {#if live.pendingTool.args?.instruction}
+            <p class="tool-args">{live.pendingTool.args.instruction}</p>
+          {:else if live.pendingTool.args && Object.keys(live.pendingTool.args).length}
+            <p class="tool-args">{JSON.stringify(live.pendingTool.args)}</p>
+          {/if}
           {#if live.pendingTool.text}<p class="tool-text">{live.pendingTool.text}</p>{/if}
         </div>
       </div>
@@ -287,6 +297,13 @@
     border-radius: 1rem;
     background: #ede9fe;
     color: #7c3aed;
+  }
+
+  .tool-args {
+    font-size: 0.8rem;
+    font-style: italic;
+    color: #6b7280;
+    margin: 0.25rem 0 0;
   }
 
   .tool-text {

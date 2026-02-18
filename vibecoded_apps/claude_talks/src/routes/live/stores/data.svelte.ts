@@ -12,8 +12,8 @@ import type {
   AudioSource,
   ConverseApi,
   LiveBackend,
+  PendingTool,
   Status,
-  ToolResult,
   Turn,
 } from '../types';
 
@@ -31,7 +31,7 @@ export function createDataStore(deps: DataStoreDeps) {
   let turns = $state<Turn[]>([]);
   let pendingInput = $state('');
   let pendingOutput = $state('');
-  let pendingTool = $state<ToolResult | null>(null);
+  let pendingTool = $state<PendingTool | null>(null);
   let awaitingToolDone = false; // not reactive — internal flag only
 
   // --- I/O handles (not reactive, not exposed) ---
@@ -50,8 +50,8 @@ export function createDataStore(deps: DataStoreDeps) {
     pendingOutput += text;
   }
 
-  function startTool(name: string) {
-    pendingTool = { name, text: '', streaming: true };
+  function startTool(name: string, args: Record<string, unknown>) {
+    pendingTool = { name, args, text: '', streaming: true };
     awaitingToolDone = false;
   }
 
@@ -96,11 +96,14 @@ export function createDataStore(deps: DataStoreDeps) {
 
     // Merge into last assistant turn if consecutive speech (no tool on either)
     const last = turns.at(-1);
-    if (last?.role === 'assistant' && !last.tool && !tool && text) {
+    if (last?.role === 'assistant' && !last.toolCall && !tool && text) {
       last.text = (last.text + '\n' + text).trim();
     } else {
       const turn: Turn = { role: 'assistant', text };
-      if (tool) turn.tool = { name: tool.name, text: tool.text, streaming: false };
+      if (tool) {
+        turn.toolCall = { name: tool.name, args: tool.args };
+        turn.toolResult = tool.text;
+      }
       turns.push(turn);
     }
 

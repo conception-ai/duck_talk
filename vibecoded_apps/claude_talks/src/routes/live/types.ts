@@ -5,8 +5,14 @@
 
 // --- Domain types ---
 
-export interface ToolResult {
+export interface ToolCall {
   name: string;
+  args: Record<string, unknown>;
+}
+
+export interface PendingTool {
+  name: string;
+  args: Record<string, unknown>;
   text: string;
   streaming: boolean;
 }
@@ -14,7 +20,8 @@ export interface ToolResult {
 export interface Turn {
   role: 'user' | 'assistant';
   text: string;
-  tool?: ToolResult;
+  toolCall?: ToolCall;
+  toolResult?: string;
 }
 
 export type Status = 'idle' | 'connecting' | 'connected' | 'recording';
@@ -25,7 +32,7 @@ export type Status = 'idle' | 'connecting' | 'connected' | 'recording';
 export interface DataStoreMethods {
   appendInput(text: string): void;
   appendOutput(text: string): void;
-  startTool(name: string): void;
+  startTool(name: string, args: Record<string, unknown>): void;
   appendTool(text: string): void;
   finishTool(): void;
   commitTurn(): void;

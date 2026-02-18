@@ -15,7 +15,7 @@ Your code must be clean, minimalist and easy to read.
 | @vibecoded_apps/claude_talks/src/routes/live/+page.svelte | Gemini Live — browser client (DI wiring + thin render) |
 | @vibecoded_apps/claude_talks/src/routes/live/types.ts | Port interfaces (DataStoreMethods, AudioPort, LiveBackend, ConverseApi) |
 | @vibecoded_apps/claude_talks/src/routes/live/stores/data.svelte.ts | Data store — reactive state + session lifecycle |
-| @vibecoded_apps/claude_talks/src/routes/live/stores/ui.svelte.ts | UI store — screen state (placeholder) |
+| @vibecoded_apps/claude_talks/src/routes/live/stores/ui.svelte.ts | UI store — persistent user prefs (voiceEnabled, apiKey, modal state) |
 | @vibecoded_apps/claude_talks/src/routes/live/gemini.ts | Gemini Live connection + message handling |
 | @vibecoded_apps/claude_talks/src/routes/live/converse.ts | SSE stream consumer for /api/converse |
 | @vibecoded_apps/claude_talks/src/routes/live/audio.ts | Browser audio I/O |
@@ -26,7 +26,7 @@ Your code must be clean, minimalist and easy to read.
 
 - **Gemini Live**: use `types.LiveConnectConfig` + `types.Modality.AUDIO` (not raw dicts). `model_turn.parts` can be `None`. File input needs chunking + `audio_stream_end=True`.
 - **Function calling**: `tools.ts` declares `TOOLS` (uses `Type` enum from SDK) + `handleToolCall()` (pure fetch). The `converse` tool is `NON_BLOCKING` + `SILENT` response — Gemini speaks an acknowledgment while Claude streams in the background. Chunks are fed back via `sendClientContent` so Gemini reads them aloud. The handler lives in `gemini.ts` (not `tools.ts`) because it needs the session ref.
-- **Svelte app**: API key via `import.meta.env.GOOGLE_API_KEY` (Vite `envPrefix` in `vite.config.ts`).
+- **Svelte app**: Gemini API key is stored client-side in `localStorage` (`claude-talks:ui`), managed via modal in `ui.svelte.ts`. Flows through DI: `ui.apiKey` → `data.svelte.ts` (`getApiKey` dep) → `gemini.ts` (`ConnectDeps.apiKey`). Modal auto-opens on first visit if no key is set.
 - **Claude SDK isolation**: The SDK subprocess must be fully isolated from the parent Claude Code session. Three layers:
   1. `os.environ.pop("CLAUDECODE", None)` at import time — prevents "nested session" error
   2. `cli_path` → `~/.claude-sdk/cli/node_modules/.bin/claude` — separate binary

@@ -67,7 +67,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
       data.commitTurn();
       for (const fc of message.toolCall.functionCalls) {
         console.log(`[${tag}] tool call:`, fc.name, fc.args);
-        data.startTool(fc.name!);
+        data.startTool(fc.name!, fc.args ?? {});
 
         if (fc.name === 'converse') {
           sessionRef?.sendToolResponse({
