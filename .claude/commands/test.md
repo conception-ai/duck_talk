@@ -1,5 +1,7 @@
-1. If not started
-- 
+- Venv: `source /Users/dhuynh95/.claude/venv/bin/activate`
+
+1. Servers 
+- If not started
     - Start both servers in background:
         - `source /Users/dhuynh95/.claude/venv/bin/activate && uvicorn api.server:app --port 8000`
         - `cd vibecoded_apps/claude_talks && npx vite --port 5173`
