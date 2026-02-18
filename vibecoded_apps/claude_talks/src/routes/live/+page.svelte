@@ -41,6 +41,16 @@
     stopPlaying = handle.stop;
     playingId = c.id;
   }
+
+  function playApprovalAudio() {
+    const chunks = live.pendingApproval?.audioChunks;
+    if (!chunks?.length) return;
+    stopPlaying?.();
+    if (playingId === 'approval') { playingId = null; return; }
+    const handle = playPcmChunks(chunks.map(ch => ch.data), 16000, () => { playingId = null; });
+    stopPlaying = handle.stop;
+    playingId = 'approval';
+  }
   let editing = $state(false);
 
   let editDraft = $state('');
@@ -183,6 +193,11 @@
             </div>
           {:else}
             <div class="approval-actions">
+              {#if live.pendingApproval.audioChunks.length}
+                <button class="correction-play" onclick={playApprovalAudio}>
+                  {playingId === 'approval' ? '\u25A0' : '\u25B6'}
+                </button>
+              {/if}
               <button class="approve-btn" onclick={handleAccept}>Accept</button>
               <button onclick={handleStartEdit}>Edit</button>
               <button class="reject-btn" onclick={handleReject}>Reject</button>
@@ -495,6 +510,10 @@
     gap: 0.5rem;
     margin-top: 0.5rem;
     justify-content: flex-end;
+  }
+
+  .approval-actions .correction-play {
+    margin-right: auto;
   }
 
   .approve-btn {
