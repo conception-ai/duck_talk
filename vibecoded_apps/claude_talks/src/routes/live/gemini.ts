@@ -118,12 +118,14 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
   let sessionRef: Session | null = null;
   // Converse phase: idle → suppressing (tool call) → relaying (1st Claude chunk) → idle (done)
   let conversePhase: 'idle' | 'suppressing' | 'relaying' = 'idle';
+  let userSpokeInTurn = false;
 
   async function handleMessage(message: LiveServerMessage) {
     console.log(`[${tag}] message:`, JSON.stringify(message).slice(0, 300));
 
     // --- Tool calls ---
     if (message.toolCall?.functionCalls) {
+      userSpokeInTurn = false; // Tool was called, don't nudge
       // Snapshot BEFORE commitTurn clears the buffer
       const learningMode = deps.getLearningMode();
       const utterance = learningMode ? data.snapshotUtterance() : null;
@@ -235,13 +237,17 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
 
     if (sc.interrupted) {
       console.log(`[${tag}] interrupted`);
+      userSpokeInTurn = false;
       player.flush();
       data.commitTurn();
       return;
     }
 
     // User speech — always pass through, even during converse.
-    if (sc.inputTranscription?.text) data.appendInput(sc.inputTranscription.text);
+    if (sc.inputTranscription?.text) {
+      data.appendInput(sc.inputTranscription.text);
+      userSpokeInTurn = true;
+    }
 
     // Gemini's speech text. During converse this is either its own chatter
     // or [CLAUDE]: echo text — both are noise (real text is in appendTool).
@@ -265,6 +271,16 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
     if (sc.turnComplete) {
       console.log(`[${tag}] turn complete`);
       data.commitTurn();
+
+      // Nudge: Gemini completed without calling converse after user spoke
+      if (userSpokeInTurn && conversePhase === 'idle') {
+        console.log(`[${tag}] no tool call after user speech, nudging`);
+        sessionRef?.sendClientContent({
+          turns: [{ role: 'user', parts: [{ text: 'You did not call the converse tool. Please call it now.' }] }],
+          turnComplete: true,
+        });
+      }
+      userSpokeInTurn = false;
     }
   }
 
