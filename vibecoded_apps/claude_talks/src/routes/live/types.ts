@@ -3,7 +3,7 @@
  * No runtime code — everything here is a type or interface.
  */
 
-import type { RecordedChunk } from '../recorder';
+import type { RecordedChunk } from './recorder';
 
 // --- Domain types ---
 

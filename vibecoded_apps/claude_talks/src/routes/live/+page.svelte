@@ -30,27 +30,39 @@
 
   let keyDraft = $state(ui.apiKey ?? '');
   let correctionsModalOpen = $state(false);
-  let editedInstruction = $state('');
-  $effect(() => {
-    if (live.pendingApproval) {
-      editedInstruction = String(live.pendingApproval.toolCall.args.instruction ?? '');
-    }
-  });
+  let editing = $state(false);
+  let editedTranscription = $state('');
 
-  function handleApprove() {
+  function handleAccept() {
     const approval = live.pendingApproval;
     if (!approval) return;
-    const original = String(approval.toolCall.args.instruction ?? '');
-    if (editedInstruction !== original) {
-      corrections.addSTT(original, editedInstruction, approval.audioChunks);
+    live.approve(approval.transcription);
+  }
+
+  function handleStartEdit() {
+    const approval = live.pendingApproval;
+    if (!approval) return;
+    editedTranscription = approval.transcription;
+    editing = true;
+  }
+
+  function handleSubmitCorrection() {
+    const approval = live.pendingApproval;
+    if (!approval) return;
+    if (editedTranscription !== approval.transcription) {
+      corrections.addSTT(approval.transcription, editedTranscription, approval.audioChunks);
     }
-    live.approve(editedInstruction);
-    editedInstruction = '';
+    live.approve(editedTranscription);
+    editing = false;
+  }
+
+  function handleCancelEdit() {
+    editing = false;
   }
 
   function handleReject() {
     live.reject();
-    editedInstruction = '';
+    editing = false;
   }
 
   let fileInput: HTMLInputElement;
@@ -149,17 +161,24 @@
         <div class="tool-result streaming">
           <span class="tool-pill">{live.pendingTool.name}</span>
           {#if live.pendingApproval}
-            {#if live.pendingApproval.transcription}
-              <p class="transcription">You said: {live.pendingApproval.transcription}</p>
+            {#if editing}
+              <p class="transcription">Original: {live.pendingApproval.transcription}</p>
+              <textarea
+                class="edit-instruction"
+                bind:value={editedTranscription}
+              ></textarea>
+              <div class="approval-actions">
+                <button class="approve-btn" onclick={handleSubmitCorrection}>Submit</button>
+                <button onclick={handleCancelEdit}>Cancel</button>
+              </div>
+            {:else}
+              <p class="transcription">{live.pendingApproval.transcription}</p>
+              <div class="approval-actions">
+                <button class="approve-btn" onclick={handleAccept}>Accept</button>
+                <button onclick={handleStartEdit}>Edit</button>
+                <button class="reject-btn" onclick={handleReject}>Reject</button>
+              </div>
             {/if}
-            <textarea
-              class="edit-instruction"
-              bind:value={editedInstruction}
-            ></textarea>
-            <div class="approval-actions">
-              <button class="approve-btn" onclick={handleApprove}>Approve</button>
-              <button class="reject-btn" onclick={handleReject}>Reject</button>
-            </div>
           {:else}
             {#if live.pendingTool.args?.instruction}
               <p class="tool-args">{live.pendingTool.args.instruction}</p>

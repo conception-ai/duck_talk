@@ -6,7 +6,7 @@
 
 import { connectGemini } from '../gemini';
 import { createRecorder, type RecorderHandle, type Recording } from '../recorder';
-import type { RecordedChunk } from '../../recorder';
+import type { RecordedChunk } from '../recorder';
 import type {
   AudioPort,
   AudioSink,
@@ -58,6 +58,7 @@ export function createDataStore(deps: DataStoreDeps) {
   }
 
   function appendOutput(text: string) {
+    if (pendingTool?.name === 'converse') return;
     pendingOutput += text;
   }
 
@@ -147,6 +148,7 @@ export function createDataStore(deps: DataStoreDeps) {
     if (!pendingApproval || !pendingExecute) return;
     const instruction =
       editedInstruction ?? String(pendingApproval.toolCall.args.instruction ?? '');
+    if (pendingTool) pendingTool.args = { instruction };
     pendingExecute(instruction);
     pendingApproval = null;
     pendingExecute = null;
