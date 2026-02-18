@@ -6,12 +6,15 @@
 
 import { connectGemini } from '../gemini';
 import { createRecorder, type RecorderHandle, type Recording } from '../recorder';
+import type { RecordedChunk } from '../../recorder';
 import type {
   AudioPort,
   AudioSink,
   AudioSource,
+  Correction,
   ConverseApi,
   LiveBackend,
+  PendingApproval,
   PendingTool,
   Status,
   Turn,
@@ -21,6 +24,8 @@ interface DataStoreDeps {
   audio: AudioPort;
   api: ConverseApi;
   getApiKey: () => string | null;
+  getLearningMode: () => boolean;
+  getCorrections: () => Correction[];
 }
 
 export function createDataStore(deps: DataStoreDeps) {
@@ -33,6 +38,12 @@ export function createDataStore(deps: DataStoreDeps) {
   let pendingOutput = $state('');
   let pendingTool = $state<PendingTool | null>(null);
   let awaitingToolDone = false; // not reactive — internal flag only
+  let pendingApproval = $state<PendingApproval | null>(null);
+  let pendingExecute: ((instruction: string) => void) | null = null;
+
+  // --- Audio buffer (for STT corrections) ---
+  let audioBuffer: RecordedChunk[] = [];
+  let sessionStart = 0;
 
   // --- I/O handles (not reactive, not exposed) ---
   let backend: LiveBackend | null = null;
@@ -75,6 +86,7 @@ export function createDataStore(deps: DataStoreDeps) {
       turns.push({ role: 'user', text: userText });
     }
     pendingInput = '';
+    audioBuffer = [];
 
     // If tool is still streaming, defer assistant commit
     if (pendingTool?.streaming) {
@@ -119,6 +131,33 @@ export function createDataStore(deps: DataStoreDeps) {
     status = s;
   }
 
+  function snapshotUtterance() {
+    return { transcription: pendingInput, audioChunks: [...audioBuffer] };
+  }
+
+  function holdForApproval(
+    approval: PendingApproval,
+    execute: (instruction: string) => void,
+  ) {
+    pendingApproval = approval;
+    pendingExecute = execute;
+  }
+
+  function approve(editedInstruction?: string) {
+    if (!pendingApproval || !pendingExecute) return;
+    const instruction =
+      editedInstruction ?? String(pendingApproval.toolCall.args.instruction ?? '');
+    pendingExecute(instruction);
+    pendingApproval = null;
+    pendingExecute = null;
+  }
+
+  function reject() {
+    pendingApproval = null;
+    pendingExecute = null;
+    finishTool();
+  }
+
   const dataMethods = {
     appendInput,
     appendOutput,
@@ -128,6 +167,8 @@ export function createDataStore(deps: DataStoreDeps) {
     commitTurn,
     pushError,
     setStatus,
+    snapshotUtterance,
+    holdForApproval,
   };
 
   // --- Lifecycle: Live mode ---
@@ -138,6 +179,8 @@ export function createDataStore(deps: DataStoreDeps) {
       pushError('API key not set. Click "API Key" to configure.');
       return;
     }
+    sessionStart = Date.now();
+    audioBuffer = [];
     player = audio.createPlayer();
     backend = await connectGemini({
       data: dataMethods,
@@ -145,12 +188,15 @@ export function createDataStore(deps: DataStoreDeps) {
       converseApi: api,
       tag: 'live',
       apiKey,
+      getLearningMode: deps.getLearningMode,
+      corrections: deps.getCorrections(),
     });
     if (!backend) return;
 
     try {
       console.log('[live] starting mic...');
       mic = await audio.startMic((base64) => {
+        audioBuffer.push({ ts: Date.now() - sessionStart, data: base64 });
         backend?.sendRealtimeInput({
           data: base64,
           mimeType: 'audio/pcm;rate=16000',
@@ -208,6 +254,8 @@ export function createDataStore(deps: DataStoreDeps) {
       pushError('API key not set. Click "API Key" to configure.');
       return;
     }
+    sessionStart = Date.now();
+    audioBuffer = [];
     player = audio.createPlayer();
     backend = await connectGemini({
       data: dataMethods,
@@ -215,6 +263,8 @@ export function createDataStore(deps: DataStoreDeps) {
       converseApi: api,
       tag: 'replay',
       apiKey,
+      getLearningMode: deps.getLearningMode,
+      corrections: deps.getCorrections(),
     });
     if (!backend) return;
 
@@ -224,6 +274,7 @@ export function createDataStore(deps: DataStoreDeps) {
       for (const chunk of recording.chunks) {
         const delay = chunk.ts - prevTs;
         if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+        audioBuffer.push({ ts: chunk.ts, data: chunk.data });
         backend.sendRealtimeInput({
           data: chunk.data,
           mimeType: `audio/pcm;rate=${recording.sampleRate}`,
@@ -255,6 +306,9 @@ export function createDataStore(deps: DataStoreDeps) {
     get pendingInput() { return pendingInput; },
     get pendingOutput() { return pendingOutput; },
     get pendingTool() { return pendingTool; },
+    get pendingApproval() { return pendingApproval; },
+    approve,
+    reject,
     start,
     stop,
     startRecording,

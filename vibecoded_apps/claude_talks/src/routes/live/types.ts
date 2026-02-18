@@ -3,6 +3,8 @@
  * No runtime code — everything here is a type or interface.
  */
 
+import type { RecordedChunk } from '../recorder';
+
 // --- Domain types ---
 
 export interface ToolCall {
@@ -26,6 +28,27 @@ export interface Turn {
 
 export type Status = 'idle' | 'connecting' | 'connected' | 'recording';
 
+// --- Corrections ---
+
+export interface STTCorrection {
+  type: 'stt';
+  id: string;
+  createdAt: string;
+  heard: string;
+  meant: string;
+  audioChunks: RecordedChunk[];
+}
+
+export type Correction = STTCorrection;
+
+// --- Learning mode approval ---
+
+export interface PendingApproval {
+  toolCall: ToolCall;
+  transcription: string;
+  audioChunks: RecordedChunk[];
+}
+
 // --- Port: Data store mutations ---
 // Plain interface so gemini.ts stays a regular .ts file (no rune imports).
 
@@ -38,6 +61,11 @@ export interface DataStoreMethods {
   commitTurn(): void;
   pushError(text: string): void;
   setStatus(s: Status): void;
+  snapshotUtterance(): { transcription: string; audioChunks: RecordedChunk[] };
+  holdForApproval(
+    approval: PendingApproval,
+    execute: (instruction: string) => void,
+  ): void;
 }
 
 // --- Port: Audio ---

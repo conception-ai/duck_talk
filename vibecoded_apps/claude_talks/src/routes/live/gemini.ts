@@ -13,9 +13,9 @@ import {
   type LiveServerMessage,
 } from '@google/genai';
 import { TOOLS, handleToolCall } from './tools';
-import type { AudioSink, ConverseApi, DataStoreMethods, LiveBackend } from './types';
+import type { AudioSink, Correction, ConverseApi, DataStoreMethods, LiveBackend } from './types';
 
-const SYSTEM_PROMPT = `
+const BASE_PROMPT = `
 You are a voice relay between a user and Claude Code (a powerful coding agent).
 
 <RULES>
@@ -29,14 +29,22 @@ You are a voice relay between a user and Claude Code (a powerful coding agent).
 You are a transparent bridge. The user is talking TO Claude Code THROUGH you. You never answer on Claude Code's behalf.
 `;
 
+function buildSystemPrompt(corrections: Correction[]): string {
+  const stt = corrections.filter((c) => c.type === 'stt');
+  if (!stt.length) return BASE_PROMPT;
+
+  const lines = stt.map(
+    (c) => `- You transcribed: "${c.heard}" → They said: "${c.meant}"`,
+  );
+  return `${BASE_PROMPT}
+<STT_CORRECTIONS>
+Your transcription often gets these wrong with this user:
+${lines.join('\n')}
+</STT_CORRECTIONS>
+`;
+}
+
 const MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
-const CONFIG = {
-  responseModalities: [Modality.AUDIO],
-  tools: TOOLS,
-  systemInstruction: SYSTEM_PROMPT,
-  inputAudioTranscription: {},
-  outputAudioTranscription: {},
-};
 
 interface ConnectDeps {
   data: DataStoreMethods;
@@ -44,6 +52,8 @@ interface ConnectDeps {
   converseApi: ConverseApi;
   tag: string;
   apiKey: string;
+  getLearningMode: () => boolean;
+  corrections: Correction[];
 }
 
 /**
@@ -64,12 +74,17 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
 
     // --- Tool calls ---
     if (message.toolCall?.functionCalls) {
+      // Snapshot BEFORE commitTurn clears the buffer
+      const learningMode = deps.getLearningMode();
+      const utterance = learningMode ? data.snapshotUtterance() : null;
+
       data.commitTurn();
       for (const fc of message.toolCall.functionCalls) {
         console.log(`[${tag}] tool call:`, fc.name, fc.args);
         data.startTool(fc.name!, fc.args ?? {});
 
         if (fc.name === 'converse') {
+          // Always send SILENT response so Gemini keeps talking
           sessionRef?.sendToolResponse({
             functionResponses: [
               {
@@ -84,32 +99,51 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
           const instruction = String(
             (fc.args as Record<string, unknown>)?.instruction ?? '',
           );
-          converseApi.stream(instruction, {
-            onChunk(text) {
-              console.log(
-                `[converse] chunk: session=${!!sessionRef}`,
-                text.slice(0, 80),
-              );
-              data.appendTool(text);
-              if (sessionRef) {
-                sessionRef.sendClientContent({
-                  turns: [
-                    { role: 'user', parts: [{ text: `[CLAUDE]: ${text}` }] },
-                  ],
-                  turnComplete: true,
-                });
-              } else {
-                console.error('[converse] session is null, cannot send chunk');
-              }
-            },
-            onDone() {
-              data.finishTool();
-            },
-            onError(msg) {
-              data.finishTool();
-              data.pushError(msg);
-            },
-          });
+
+          const executeConverse = (approvedInstruction: string) => {
+            converseApi.stream(approvedInstruction, {
+              onChunk(text) {
+                console.log(
+                  `[converse] chunk: session=${!!sessionRef}`,
+                  text.slice(0, 80),
+                );
+                data.appendTool(text);
+                if (sessionRef) {
+                  sessionRef.sendClientContent({
+                    turns: [
+                      { role: 'user', parts: [{ text: `[CLAUDE]: ${text}` }] },
+                    ],
+                    turnComplete: true,
+                  });
+                } else {
+                  console.error('[converse] session is null, cannot send chunk');
+                }
+              },
+              onDone() {
+                data.finishTool();
+              },
+              onError(msg) {
+                data.finishTool();
+                data.pushError(msg);
+              },
+            });
+          };
+
+          if (utterance) {
+            // Learning mode: hold for user approval
+            console.log(`[${tag}] learning mode: holding converse for approval`);
+            data.holdForApproval(
+              {
+                toolCall: { name: fc.name!, args: fc.args ?? {} },
+                transcription: utterance.transcription,
+                audioChunks: utterance.audioChunks,
+              },
+              executeConverse,
+            );
+          } else {
+            // Normal mode: execute immediately
+            executeConverse(instruction);
+          }
           continue;
         }
 
@@ -151,9 +185,17 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
   }
 
   try {
+    const systemPrompt = buildSystemPrompt(deps.corrections);
+    console.log(`[${tag}] system prompt:`, systemPrompt.slice(0, 200));
     const session = await ai.live.connect({
       model: MODEL,
-      config: CONFIG,
+      config: {
+        responseModalities: [Modality.AUDIO],
+        tools: TOOLS,
+        systemInstruction: systemPrompt,
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+      },
       callbacks: {
         onopen: () => {
           console.log(`[${tag}] connected`);

@@ -10,6 +10,7 @@ const STORAGE_KEY = 'claude-talks:ui';
 interface Persisted {
   voiceEnabled: boolean;
   apiKey: string | null;
+  learningMode: boolean;
 }
 
 function load(): Persisted {
@@ -17,7 +18,7 @@ function load(): Persisted {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch { /* corrupted — fall through to default */ }
-  return { voiceEnabled: true, apiKey: null };
+  return { voiceEnabled: true, apiKey: null, learningMode: false };
 }
 
 function save(state: Persisted) {
@@ -29,13 +30,19 @@ export function createUIStore() {
   let voiceEnabled = $state(persisted.voiceEnabled);
   let apiKey = $state<string | null>(persisted.apiKey);
   let apiKeyModalOpen = $state(!apiKey);
+  let learningMode = $state(persisted.learningMode);
 
   function persist() {
-    save({ voiceEnabled, apiKey });
+    save({ voiceEnabled, apiKey, learningMode });
   }
 
   function toggleVoice() {
     voiceEnabled = !voiceEnabled;
+    persist();
+  }
+
+  function toggleLearningMode() {
+    learningMode = !learningMode;
     persist();
   }
 
@@ -59,7 +66,9 @@ export function createUIStore() {
     get voiceEnabled() { return voiceEnabled; },
     get apiKey() { return apiKey; },
     get apiKeyModalOpen() { return apiKeyModalOpen; },
+    get learningMode() { return learningMode; },
     toggleVoice,
+    toggleLearningMode,
     setApiKey,
     openApiKeyModal,
     closeApiKeyModal,
