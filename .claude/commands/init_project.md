@@ -39,7 +39,6 @@ Your code must be clean, minimalist and easy to read.
 ## Locations & commands
 
 - Session files: `~/.claude/projects/-{cwd-with-dashes}/{session-id}.jsonl`
-- Venv: `source /Users/dhuynh95/.claude/venv/bin/activate`
 - Svelte app: `cd vibecoded_apps/claude_talks && npm run dev` (port 5000)
 - Watcher CLI: `python -m claude_talks.watcher /path/to/session.jsonl --handler log`
 - Backend: `uvicorn api.server:app --port 8000`

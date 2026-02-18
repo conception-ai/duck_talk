@@ -1,13 +1,30 @@
 <script lang="ts">
   import { createDataStore } from './stores/data.svelte';
+  import { createUIStore } from './stores/ui.svelte';
   import { startMic, createPlayer } from './audio';
   import { createConverseApi } from './converse';
   import type { Recording } from './recorder';
+  import type { AudioSink } from './types';
+
+  const ui = createUIStore();
 
   const live = createDataStore({
-    audio: { startMic, createPlayer },
+    audio: {
+      startMic,
+      createPlayer(): AudioSink {
+        const raw = createPlayer();
+        return {
+          play(b64: string) { if (ui.voiceEnabled) raw.play(b64); },
+          flush() { raw.flush(); },
+          stop() { raw.stop(); },
+        };
+      },
+    },
     api: createConverseApi(),
+    getApiKey: () => ui.apiKey,
   });
+
+  let keyDraft = $state(ui.apiKey ?? '');
 
   let fileInput: HTMLInputElement;
   let recordings = $state<string[]>([]);
@@ -43,6 +60,10 @@
 <main>
   <header>
     <h1>Gemini Live</h1>
+    <button class="header-sm" onclick={() => { keyDraft = ui.apiKey ?? ''; ui.openApiKeyModal(); }}>API Key</button>
+    <button class="header-sm" class:muted={!ui.voiceEnabled} onclick={ui.toggleVoice}>
+      {ui.voiceEnabled ? 'Voice On' : 'Voice Off'}
+    </button>
     {#if live.status === 'idle'}
       <button onclick={live.start}>Start</button>
       <button class="rec-btn" onclick={live.startRecording}>Record</button>
@@ -99,6 +120,26 @@
   </div>
 </main>
 
+{#if ui.apiKeyModalOpen}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="backdrop" onkeydown={() => {}} onclick={ui.closeApiKeyModal}>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="modal" onkeydown={() => {}} onclick={(e) => e.stopPropagation()}>
+      <h2>Gemini API Key</h2>
+      <input
+        type="password"
+        placeholder="Enter your API key"
+        bind:value={keyDraft}
+        onkeydown={(e) => { if (e.key === 'Enter') ui.setApiKey(keyDraft); }}
+      />
+      <div class="modal-actions">
+        <button onclick={ui.closeApiKeyModal}>Cancel</button>
+        <button onclick={() => ui.setApiKey(keyDraft)}>Save</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   main {
     max-width: 600px;
@@ -129,6 +170,58 @@
   button:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .header-sm {
+    font-size: 0.75rem;
+  }
+
+  .header-sm:first-of-type {
+    margin-left: auto;
+  }
+
+  .header-sm.muted {
+    opacity: 0.5;
+  }
+
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+
+  .modal {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 0.5rem;
+    width: min(400px, 90vw);
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .modal h2 {
+    margin: 0;
+    font-size: 1.1rem;
+  }
+
+  .modal input {
+    padding: 0.5rem;
+    font-size: 0.9rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.25rem;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
   }
 
   .rec-file {

@@ -43,6 +43,7 @@ interface ConnectDeps {
   player: AudioSink;
   converseApi: ConverseApi;
   tag: string;
+  apiKey: string;
 }
 
 /**
@@ -50,13 +51,7 @@ interface ConnectDeps {
  * Returns null on failure (error is pushed to data store).
  */
 export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | null> {
-  const { data, player, converseApi, tag } = deps;
-
-  const apiKey = import.meta.env.GOOGLE_API_KEY as string | undefined;
-  if (!apiKey) {
-    data.pushError('GOOGLE_API_KEY not set.');
-    return null;
-  }
+  const { data, player, converseApi, tag, apiKey } = deps;
 
   const ai = new GoogleGenAI({ apiKey });
   data.setStatus('connecting');

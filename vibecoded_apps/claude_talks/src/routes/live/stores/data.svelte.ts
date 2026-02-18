@@ -20,6 +20,7 @@ import type {
 interface DataStoreDeps {
   audio: AudioPort;
   api: ConverseApi;
+  getApiKey: () => string | null;
 }
 
 export function createDataStore(deps: DataStoreDeps) {
@@ -129,12 +130,18 @@ export function createDataStore(deps: DataStoreDeps) {
   // --- Lifecycle: Live mode ---
 
   async function start() {
+    const apiKey = deps.getApiKey();
+    if (!apiKey) {
+      pushError('API key not set. Click "API Key" to configure.');
+      return;
+    }
     player = audio.createPlayer();
     backend = await connectGemini({
       data: dataMethods,
       player,
       converseApi: api,
       tag: 'live',
+      apiKey,
     });
     if (!backend) return;
 
@@ -193,12 +200,18 @@ export function createDataStore(deps: DataStoreDeps) {
   // --- Lifecycle: Replay (Gemini + recorded chunks) ---
 
   async function startReplay(recording: Recording) {
+    const apiKey = deps.getApiKey();
+    if (!apiKey) {
+      pushError('API key not set. Click "API Key" to configure.');
+      return;
+    }
     player = audio.createPlayer();
     backend = await connectGemini({
       data: dataMethods,
       player,
       converseApi: api,
       tag: 'replay',
+      apiKey,
     });
     if (!backend) return;
 

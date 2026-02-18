@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s
 log = logging.getLogger("api")
 
 app = FastAPI()
-claude = Claude(cwd="/Users/dhuynh95/staging/experiments-conception")
+claude = Claude(cwd="/Users/dhuynh95/claude_talks")
 
 # Sentence-ending punctuation followed by space/newline, or standalone newline
 _BREAK = re.compile(r"(?<=[.!?])\s|(?<=\n)")
