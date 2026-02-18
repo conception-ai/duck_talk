@@ -2,6 +2,54 @@
  * Gemini Live API connection and message handling.
  * Plain .ts — no runes, no reactive state.
  * Receives DataStoreMethods via dependency injection.
+ *
+ * ## Message flow
+ *
+ * Gemini Live is a bidirectional WebSocket. We send mic audio via
+ * `sendRealtimeInput` and receive two kinds of messages:
+ *
+ * 1. **serverContent** — STT transcriptions, model audio, turn boundaries
+ * 2. **toolCall** — Gemini wants to invoke a declared function
+ *
+ * ## The converse tool (core complexity)
+ *
+ * The `converse` tool is the bridge to Claude Code. When Gemini decides
+ * the user wants something done, it calls `converse({ instruction })`.
+ * The tool is declared as NON_BLOCKING so Gemini can speak an
+ * acknowledgment ("Asking Claude") while we stream Claude's response
+ * in the background.
+ *
+ * The response flow:
+ *   1. Gemini says "Asking Claude" (audio + outputTranscription)
+ *   2. Gemini emits toolCall → we send a SILENT tool response
+ *   3. We stream Claude's answer via /api/converse (SSE)
+ *   4. Each Claude chunk is fed back as sendClientContent([CLAUDE]: text)
+ *   5. Gemini reads the [CLAUDE] text aloud → produces new model audio
+ *
+ * ## conversePhase — suppression state machine
+ *
+ * Problem: between steps 2-4 Gemini keeps emitting its own audio/text.
+ * Without gating, this leaks into the UI (echo text, duplicate audio).
+ *
+ * ```
+ * idle ──→ suppressing ──→ relaying ──→ idle
+ *       (tool call)    (1st Claude   (stream
+ *       + flush audio   chunk sent)   done)
+ * ```
+ *
+ * | Phase       | Audio (modelTurn)     | outputTranscription    |
+ * |-------------|-----------------------|------------------------|
+ * | idle        | play                  | append to pendingOutput |
+ * | suppressing | BLOCK (+ flush)       | BLOCK                  |
+ * | relaying    | play (Gemini reads    | BLOCK ([CLAUDE]: echo  |
+ * |             | Claude's text aloud)  | is noise; real text is |
+ * |             |                       | in appendTool)         |
+ *
+ * inputTranscription (user speech) always passes through.
+ *
+ * In learning mode, the stream doesn't start until the user approves.
+ * The phase stays `suppressing` the whole time — audio and text are
+ * blocked while waiting. On reject, the cancel callback resets to idle.
  */
 
 import {
@@ -86,10 +134,13 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
         data.startTool(fc.name!, fc.args ?? {});
 
         if (fc.name === 'converse') {
+          // Enter suppressing: block all Gemini audio/text until Claude's
+          // first chunk arrives (see conversePhase doc at top of file).
           conversePhase = 'suppressing';
-          player.flush();
+          player.flush(); // cancel queued "Asking Claude" audio remnants
 
-          // Always send SILENT response so Gemini keeps talking
+          // SILENT = Gemini won't wait for our text response before speaking.
+          // It can start its acknowledgment immediately.
           sessionRef?.sendToolResponse({
             functionResponses: [
               {
@@ -105,6 +156,9 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
             (fc.args as Record<string, unknown>)?.instruction ?? '',
           );
 
+          // Called immediately (normal mode) or after user approval (learning mode).
+          // Streams Claude's response via SSE and feeds each chunk back to Gemini
+          // so it reads the answer aloud.
           const executeConverse = (approvedInstruction: string) => {
             converseApi.stream(approvedInstruction, {
               onChunk(text) {
@@ -112,9 +166,14 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
                   `[converse] chunk: session=${!!sessionRef}`,
                   text.slice(0, 80),
                 );
+                // Store Claude's text in the tool result (visible in UI)
                 data.appendTool(text);
                 if (sessionRef) {
+                  // First chunk: transition suppressing→relaying so Gemini's
+                  // audio (reading Claude's text) starts playing through.
                   if (conversePhase === 'suppressing') conversePhase = 'relaying';
+                  // Feed Claude's text to Gemini as a user message.
+                  // The [CLAUDE] prefix tells Gemini to read it aloud verbatim.
                   sessionRef.sendClientContent({
                     turns: [
                       { role: 'user', parts: [{ text: `[CLAUDE]: ${text}` }] },
@@ -138,7 +197,10 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
           };
 
           if (utterance) {
-            // Learning mode: hold for user approval
+            // Learning mode: pause for user to Accept/Edit/Reject the STT
+            // and tool call before executing. Phase stays `suppressing` the
+            // entire time — no audio or text leaks while waiting.
+            // Third arg: cancel callback resets phase if user rejects.
             console.log(`[${tag}] learning mode: holding converse for approval`);
             data.holdForApproval(
               {
@@ -151,7 +213,6 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
               () => { conversePhase = 'idle'; },
             );
           } else {
-            // Normal mode: execute immediately
             executeConverse(instruction);
           }
           continue;
@@ -168,7 +229,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
       return;
     }
 
-    // --- Server content ---
+    // --- Server content (STT, TTS audio, turn boundaries) ---
     const sc = message.serverContent;
     if (!sc) return;
 
@@ -179,16 +240,22 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
       return;
     }
 
+    // User speech — always pass through, even during converse.
     if (sc.inputTranscription?.text) data.appendInput(sc.inputTranscription.text);
 
-    // Suppress Gemini's output text during converse (ack arrives pre-tool-call, passes through)
+    // Gemini's speech text. During converse this is either its own chatter
+    // or [CLAUDE]: echo text — both are noise (real text is in appendTool).
+    // "Asking Claude" arrives BEFORE the toolCall message, so it naturally
+    // passes through while conversePhase is still 'idle'.
     if (sc.outputTranscription?.text && conversePhase === 'idle') {
       data.appendOutput(sc.outputTranscription.text);
     }
 
+    // Gemini's audio output. During 'suppressing' this is residual audio
+    // from Gemini's own generation (pre-tool-call remnants). During
+    // 'relaying' this is Gemini reading Claude's text aloud — we want that.
     if (sc.modelTurn?.parts) {
       for (const part of sc.modelTurn.parts) {
-        // Suppress Gemini's own audio between tool call and first Claude chunk
         if (part.inlineData?.data && conversePhase !== 'suppressing') {
           player.play(part.inlineData.data);
         }
