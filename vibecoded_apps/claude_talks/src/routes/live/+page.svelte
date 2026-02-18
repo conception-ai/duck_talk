@@ -129,8 +129,10 @@
   </header>
 
   <div class="messages">
-    {#each live.turns as turn}
-      <div class="msg {turn.role}">
+    {#each live.turns as turn, i}
+      {@const showApproval = turn.role === 'user' && !!live.pendingApproval
+        && !live.turns.slice(i + 1).some(t => t.role === 'user')}
+      <div class="msg {turn.role}" class:approval={showApproval}>
         <span class="label">{turn.role === 'user' ? 'You' : 'Gemini'}</span>
         {#if turn.text}<p>{turn.text}</p>{/if}
         {#if turn.toolCall}
@@ -143,6 +145,25 @@
             {/if}
             {#if turn.toolResult}<p class="tool-text">{turn.toolResult}</p>{/if}
           </div>
+        {/if}
+        {#if showApproval}
+          {#if editing}
+            <p class="transcription">Original: {live.pendingApproval.transcription}</p>
+            <textarea
+              class="edit-instruction"
+              bind:value={editedTranscription}
+            ></textarea>
+            <div class="approval-actions">
+              <button class="approve-btn" onclick={handleSubmitCorrection}>Submit</button>
+              <button onclick={handleCancelEdit}>Cancel</button>
+            </div>
+          {:else}
+            <div class="approval-actions">
+              <button class="approve-btn" onclick={handleAccept}>Accept</button>
+              <button onclick={handleStartEdit}>Edit</button>
+              <button class="reject-btn" onclick={handleReject}>Reject</button>
+            </div>
+          {/if}
         {/if}
       </div>
     {/each}
@@ -160,31 +181,10 @@
         {#if live.pendingOutput}<p>{live.pendingOutput}</p>{/if}
         <div class="tool-result streaming">
           <span class="tool-pill">{live.pendingTool.name}</span>
-          {#if live.pendingApproval}
-            {#if editing}
-              <p class="transcription">Original: {live.pendingApproval.transcription}</p>
-              <textarea
-                class="edit-instruction"
-                bind:value={editedTranscription}
-              ></textarea>
-              <div class="approval-actions">
-                <button class="approve-btn" onclick={handleSubmitCorrection}>Submit</button>
-                <button onclick={handleCancelEdit}>Cancel</button>
-              </div>
-            {:else}
-              <p class="transcription">{live.pendingApproval.transcription}</p>
-              <div class="approval-actions">
-                <button class="approve-btn" onclick={handleAccept}>Accept</button>
-                <button onclick={handleStartEdit}>Edit</button>
-                <button class="reject-btn" onclick={handleReject}>Reject</button>
-              </div>
-            {/if}
-          {:else}
-            {#if live.pendingTool.args?.instruction}
-              <p class="tool-args">{live.pendingTool.args.instruction}</p>
-            {:else if live.pendingTool.args && Object.keys(live.pendingTool.args).length}
-              <p class="tool-args">{JSON.stringify(live.pendingTool.args)}</p>
-            {/if}
+          {#if live.pendingTool.args?.instruction}
+            <p class="tool-args">{live.pendingTool.args.instruction}</p>
+          {:else if live.pendingTool.args && Object.keys(live.pendingTool.args).length}
+            <p class="tool-args">{JSON.stringify(live.pendingTool.args)}</p>
           {/if}
           {#if live.pendingTool.text}<p class="tool-text">{live.pendingTool.text}</p>{/if}
         </div>
@@ -410,6 +410,11 @@
 
   .msg.pending {
     opacity: 0.6;
+  }
+
+  .msg.user.approval {
+    opacity: 1;
+    border: 2px solid #059669;
   }
 
   .msg p {

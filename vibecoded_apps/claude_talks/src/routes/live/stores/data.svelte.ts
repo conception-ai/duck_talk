@@ -84,7 +84,13 @@ export function createDataStore(deps: DataStoreDeps) {
     // Always flush user input
     const userText = pendingInput.trim();
     if (userText) {
-      turns.push({ role: 'user', text: userText });
+      // Merge into last user turn if consecutive (VAD fires multiple interrupts per utterance)
+      const last = turns.at(-1);
+      if (last?.role === 'user') {
+        last.text = (last.text + ' ' + userText).trim();
+      } else {
+        turns.push({ role: 'user', text: userText });
+      }
     }
     pendingInput = '';
     audioBuffer = [];
