@@ -86,10 +86,20 @@ The agent is a **vanilla test executor** — it does exactly what you tell it an
 
 ### Servers
 
-Start both in background before launching the agent:
+**Check first, don't restart blindly.** Curl both ports before starting anything. Only start what's missing. Never kill running servers — waste of tokens and time.
+
 ```bash
-source /Users/dhuynh95/.claude/venv/bin/activate && uvicorn api.server:app --port 8000
-cd vibecoded_apps/claude_talks && npx vite --port 5173
+# Check if already running
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/docs  # backend
+curl -s -o /dev/null -w "%{http_code}" http://localhost:5173       # frontend
+```
+
+Only start what returned non-200:
+```bash
+# Backend (must run from project root)
+cd /Users/dhuynh95/claude_talks && source /Users/dhuynh95/.claude/venv/bin/activate && uvicorn api.server:app --port 8000
+# Frontend
+cd /Users/dhuynh95/claude_talks/vibecoded_apps/claude_talks && npx vite --port 5173
 ```
 
 ### Standard E2E scenarios
