@@ -1,8 +1,10 @@
 """FastAPI backend that streams Claude Code responses as SSE."""
 
 import asyncio
+import glob
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -11,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from claude_client import Claude, TextDelta
+from models import Conversation
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("api")
@@ -22,6 +25,52 @@ log.info("system prompt loaded (%d chars):\n%s", len(_SYSTEM_PROMPT), _SYSTEM_PR
 
 app = FastAPI()
 claude = Claude(cwd="/Users/dhuynh95/claude_talks", system_prompt=_SYSTEM_PROMPT)
+
+_PROJECT_DIR = Path.home() / ".claude/projects/-Users-dhuynh95-claude-talks"
+
+
+class SessionInfo(BaseModel):
+    id: str
+    name: str
+    summary: str
+    last_user_message: str
+    last_assistant_message: str
+    updated_at: str
+    message_count: int
+
+
+@app.get("/api/sessions")
+def list_sessions() -> list[SessionInfo]:
+    if not _PROJECT_DIR.is_dir():
+        return []
+    files = sorted(
+        glob.glob(str(_PROJECT_DIR / "*.jsonl")),
+        key=os.path.getmtime,
+        reverse=True,
+    )
+    sessions: list[SessionInfo] = []
+    for f in files:
+        sid = Path(f).stem
+        try:
+            conv = Conversation.from_jsonl(f)
+        except Exception:
+            continue
+        name = conv.title
+        if not name:
+            continue
+        sessions.append(
+            SessionInfo(
+                id=sid,
+                name=name,
+                summary=conv.description,
+                last_user_message=conv.last_user_message,
+                last_assistant_message=conv.last_assistant_message,
+                updated_at=conv.updated_at,
+                message_count=conv.message_count,
+            )
+        )
+    return sessions
+
 
 # Sentence-ending punctuation followed by space/newline, or standalone newline
 _BREAK = re.compile(r"(?<=[.!?])\s|(?<=\n)")
