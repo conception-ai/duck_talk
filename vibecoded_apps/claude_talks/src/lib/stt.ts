@@ -1,25 +1,9 @@
 /**
- * Speech-to-text via Gemini audio understanding.
+ * Pure audio utilities — no LLM dependency.
  *
  * Usage:
- *   const stt = createSTT({ apiKey });
- *   const text = await stt(chunksToWav(recording.chunks, recording.sampleRate), 'audio/wav');
+ *   const wav = chunksToWav(recording.chunks, recording.sampleRate);
  */
-
-import { GoogleGenAI } from '@google/genai';
-
-const DEFAULT_MODEL = 'gemini-3-flash-preview';
-
-const clients = new Map<string, GoogleGenAI>();
-
-function getClient(apiKey: string): GoogleGenAI {
-  let client = clients.get(apiKey);
-  if (!client) {
-    client = new GoogleGenAI({ apiKey });
-    clients.set(apiKey, client);
-  }
-  return client;
-}
 
 /** Combine sequential base64 PCM chunks into a single base64 PCM string. */
 export function combineChunks(chunks: { data: string }[]): string {
@@ -54,32 +38,4 @@ export function chunksToWav(chunks: { data: string }[], sampleRate = 16000): str
   const wav = new Uint8Array(44 + pcm.length);
   wav.set(new Uint8Array(header)); wav.set(pcm, 44);
   return btoa(String.fromCharCode(...wav));
-}
-
-export interface STT {
-  (audio: string, mimeType: string): Promise<string>;
-}
-
-export interface STTConfig {
-  apiKey: string;
-  model?: string;
-}
-
-export function createSTT(cfg: STTConfig): STT {
-  const client = getClient(cfg.apiKey);
-  const model = cfg.model ?? DEFAULT_MODEL;
-
-  return async (audio, mimeType) => {
-    const response = await client.models.generateContent({
-      model,
-      contents: [{
-        role: 'user',
-        parts: [
-          { text: 'Transcribe this audio exactly as spoken. Return only the transcription, no commentary.' },
-          { inlineData: { data: audio, mimeType } },
-        ],
-      }],
-    });
-    return response.text ?? '';
-  };
 }

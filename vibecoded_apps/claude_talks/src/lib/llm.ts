@@ -13,9 +13,14 @@ import { GoogleGenAI } from '@google/genai';
 
 // --- Types ---
 
+export interface Part {
+  text?: string;
+  inlineData?: { data: string; mimeType: string };
+}
+
 export interface Message {
   role: 'user' | 'assistant';
-  content: string;
+  content: string | Part[];
 }
 
 export type Input = string | Message[];
@@ -55,13 +60,15 @@ function getClient(apiKey: string): GoogleGenAI {
 
 // --- Internals ---
 
-function toContents(input: Input): { role: string; parts: { text: string }[] }[] {
+function toContents(input: Input) {
   if (typeof input === 'string') {
     return [{ role: 'user', parts: [{ text: input }] }];
   }
   return input.map((m) => ({
     role: m.role === 'assistant' ? 'model' : m.role,
-    parts: [{ text: m.content }],
+    parts: typeof m.content === 'string'
+      ? [{ text: m.content }]
+      : m.content,
   }));
 }
 
@@ -93,7 +100,7 @@ function toConfig(
 
 // --- Factory ---
 
-const DEFAULT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_MODEL = 'gemini-3-flash-preview';
 
 export function createLLM(cfg: LLMConfig): LLM {
   const client = getClient(cfg.apiKey);
