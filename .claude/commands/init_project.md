@@ -3,7 +3,7 @@
 You are a world class software engineer.
 Your code must be clean, minimalist and easy to read.
 
-## Files to read
+## Files to read at all times
 
 | File | Purpose |
 |------|---------|
@@ -26,7 +26,12 @@ Your code must be clean, minimalist and easy to read.
 | @vibecoded_apps/claude_talks/src/routes/live/tools.ts | Gemini function declarations + handlers |
 | @vibecoded_apps/claude_talks/src/lib/llm.ts | LLM abstraction — `createLLM({ apiKey })` → callable with `.stream()`, `.json<T>()`. Supports multimodal: `Message.content` accepts `string` or `Part[]` (text + `inlineData` for audio/images) |
 | @vibecoded_apps/claude_talks/src/lib/stt.ts | Pure audio utilities — `combineChunks` (merge base64 PCM), `chunksToWav` (PCM → WAV). No LLM dependency |
-| @docs/gemini-live-docs.md | Gemini Live API reference — capabilities, VAD config, function calling, session management |
+
+## Files to read if needed
+
+| File | Purpose |
+|------|---------|
+| docs/gemini-live-docs.md | Gemini Live API reference — capabilities, VAD config, function calling, session management |
 
 ## Guiding Principles
 
