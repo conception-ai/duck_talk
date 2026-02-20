@@ -650,7 +650,7 @@ class Conversation(BaseModel):
         for entry in entries:
             if isinstance(entry.message.content, str):
                 text = entry.message.content.strip()
-                if text and not text.startswith("<"):
+                if text:
                     return text[:200]
         return ""
 
