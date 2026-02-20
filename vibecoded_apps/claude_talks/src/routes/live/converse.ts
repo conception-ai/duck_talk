@@ -24,6 +24,7 @@ export function createConverseApi(
     abort() { controller?.abort(); controller = null; },
 
     async stream(instruction, { onChunk, onDone, onError }) {
+      const t0 = performance.now();
       console.log('[converse] starting:', instruction.slice(0, 120), 'session:', sessionId);
       controller = new AbortController();
       try {
@@ -50,6 +51,7 @@ export function createConverseApi(
         let buf = '';
         let nChunks = 0;
         let fullText = '';
+        let ttft = 0;
 
         for (;;) {
           const { done, value } = await reader.read();
@@ -66,12 +68,19 @@ export function createConverseApi(
             if (data.text) {
               nChunks++;
               fullText += data.text;
+              const elapsed = Math.round(performance.now() - t0);
+              if (nChunks === 1) {
+                ttft = elapsed;
+                console.log(`[converse] TTFT: ${elapsed}ms, first chunk: ${JSON.stringify(data.text)}`);
+              }
+              console.log(`[converse chunk ${nChunks} +${elapsed}ms] ${JSON.stringify(data.text)}`);
               onChunk(data.text);
             }
             if (data.done) {
               if (data.session_id) sessionId = data.session_id;
+              const total = Math.round(performance.now() - t0);
               console.log(
-                `[converse] done: ${nChunks} chunks, cost=$${data.cost_usd}, ${data.duration_ms}ms, session=${sessionId}\n[claude] ${fullText}`,
+                `[converse] done: ${nChunks} chunks, TTFT=${ttft}ms, total=${total}ms, cost=$${data.cost_usd}, sdk=${data.duration_ms}ms, session=${sessionId}\n[claude] ${fullText}`,
               );
               onDone?.(data.cost_usd, data.duration_ms);
             }

@@ -158,31 +158,53 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
           // Streams Claude's response via SSE and feeds each chunk back to Gemini
           // so it reads the answer aloud.
           const executeConverse = (approvedInstruction: string) => {
+            // Gemini TTS accumulation: buffer chunks for 1s, then passthrough.
+            // Visual display (appendTool) is always immediate.
+            let geminiBuf = '';
+            let geminiFlushed = false;
+            let geminiTimer: ReturnType<typeof setTimeout> | undefined;
+
+            const sendToGemini = (text: string) => {
+              sessionRef?.sendClientContent({
+                turns: [{ role: 'user', parts: [{ text: `[CLAUDE]: ${text}` }] }],
+                turnComplete: true,
+              });
+            };
+
+            const flushGeminiBuf = () => {
+              if (geminiBuf) {
+                sendToGemini(geminiBuf);
+                geminiBuf = '';
+              }
+              geminiFlushed = true;
+              geminiTimer = undefined;
+            };
+
             converseApi.stream(approvedInstruction, {
               onChunk(text) {
-                // Store Claude's text in the tool result (visible in UI)
                 data.appendTool(text);
-                if (sessionRef) {
-                  // First chunk: transition suppressing→relaying so Gemini's
-                  // audio (reading Claude's text) starts playing through.
-                  if (conversePhase === 'suppressing') conversePhase = 'relaying';
-                  // Feed Claude's text to Gemini as a user message.
-                  // The [CLAUDE] prefix tells Gemini to read it aloud verbatim.
-                  sessionRef.sendClientContent({
-                    turns: [
-                      { role: 'user', parts: [{ text: `[CLAUDE]: ${text}` }] },
-                    ],
-                    turnComplete: true,
-                  });
-                } else {
+                if (!sessionRef) {
                   console.error('[converse] session is null, cannot send chunk');
+                  return;
+                }
+                if (conversePhase === 'suppressing') conversePhase = 'relaying';
+
+                if (geminiFlushed) {
+                  sendToGemini(text);
+                  return;
+                }
+                geminiBuf += text;
+                if (!geminiTimer) {
+                  geminiTimer = setTimeout(flushGeminiBuf, 1000);
                 }
               },
               onDone() {
+                flushGeminiBuf();
                 conversePhase = 'idle';
                 data.finishTool();
               },
               onError(msg) {
+                if (geminiTimer) clearTimeout(geminiTimer);
                 conversePhase = 'idle';
                 data.finishTool();
                 data.pushError(msg);

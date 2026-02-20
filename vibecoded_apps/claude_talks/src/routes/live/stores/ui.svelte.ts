@@ -18,6 +18,14 @@ interface Persisted {
   systemPrompt: string;
 }
 
+const DEFAULTS: Persisted = {
+  voiceEnabled: true,
+  apiKey: null,
+  mode: 'direct',
+  model: DEFAULT_MODEL,
+  systemPrompt: DEFAULT_SYSTEM_PROMPT,
+};
+
 function load(): Persisted {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -25,13 +33,12 @@ function load(): Persisted {
       const parsed = JSON.parse(raw);
       // Migrate old learningMode boolean → mode enum
       if ('learningMode' in parsed && !('mode' in parsed)) {
-        return { ...parsed, mode: parsed.learningMode ? 'review' : 'direct' };
+        parsed.mode = parsed.learningMode ? 'review' : 'direct';
       }
-      return parsed;
+      return { ...DEFAULTS, ...parsed };
     }
   } catch { /* corrupted — fall through to default */ }
-  return { voiceEnabled: true, apiKey: null, mode: 'direct',
-           model: DEFAULT_MODEL, systemPrompt: DEFAULT_SYSTEM_PROMPT };
+  return { ...DEFAULTS };
 }
 
 function save(state: Persisted) {
