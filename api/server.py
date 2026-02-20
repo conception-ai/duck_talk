@@ -33,8 +33,6 @@ class SessionInfo(BaseModel):
     id: str
     name: str
     summary: str
-    last_user_message: str
-    last_assistant_message: str
     updated_at: str
     message_count: int
 
@@ -75,16 +73,14 @@ def list_sessions() -> list[SessionInfo]:
             conv = Conversation.from_jsonl(f)
         except Exception:
             continue
-        name = conv.title
+        name = conv.last_user_message or conv.title
         if not name:
             continue
         sessions.append(
             SessionInfo(
                 id=sid,
                 name=name,
-                summary=conv.description,
-                last_user_message=conv.last_user_message,
-                last_assistant_message=conv.last_assistant_message,
+                summary=conv.last_assistant_message,
                 updated_at=timestamps[f],
                 message_count=conv.message_count,
             )
