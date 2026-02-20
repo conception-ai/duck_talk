@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { marked } from 'marked';
   import { push } from 'svelte-spa-router';
   import { createDataStore } from './stores/data.svelte';
   import { createUIStore } from './stores/ui.svelte';
@@ -209,7 +210,13 @@
     {#each live.messages as msg}
       <div class="msg {msg.role}">
         <span class="label">{msg.role === 'user' ? 'You' : 'Claude'}</span>
-        {#if messageText(msg)}<p>{messageText(msg)}</p>{/if}
+        {#if messageText(msg)}
+          {#if msg.role === 'assistant'}
+            <div class="markdown">{@html marked.parse(messageText(msg))}</div>
+          {:else}
+            <p>{messageText(msg)}</p>
+          {/if}
+        {/if}
         {#each messageThinking(msg) as think}
           <details class="thinking">
             <summary>Thinking...</summary>
@@ -247,7 +254,7 @@
       {@const showApproval = live.pendingApproval != null}
       <div class="msg assistant" class:pending={!showApproval} class:approval={showApproval}>
         <span class="label">Gemini</span>
-        {#if live.pendingOutput}<p>{live.pendingOutput}</p>{/if}
+        {#if live.pendingOutput}<div class="markdown">{@html marked.parse(live.pendingOutput)}</div>{/if}
         <div class="tool-result" class:streaming={!showApproval}>
           <span class="tool-pill">{live.pendingTool.name}</span>
           {#if showApproval}
@@ -257,7 +264,7 @@
           {:else if live.pendingTool.args && Object.keys(live.pendingTool.args).length}
             <p class="tool-args">{JSON.stringify(live.pendingTool.args)}</p>
           {/if}
-          {#if live.pendingTool.text}<p class="tool-text">{live.pendingTool.text}</p>{/if}
+          {#if live.pendingTool.text}<div class="tool-text markdown">{@html marked.parse(live.pendingTool.text)}</div>{/if}
         </div>
         {#if showApproval}
           {#if editing}
@@ -283,7 +290,7 @@
     {:else if live.pendingOutput}
       <div class="msg assistant pending">
         <span class="label">Gemini</span>
-        <p>{live.pendingOutput}</p>
+        <div class="markdown">{@html marked.parse(live.pendingOutput)}</div>
       </div>
     {/if}
   </div>
@@ -645,6 +652,53 @@
 
   .msg p {
     margin: 0.25rem 0 0;
+  }
+
+  /* Markdown prose inside chat bubbles */
+  .markdown :global(h1),
+  .markdown :global(h2),
+  .markdown :global(h3) {
+    margin: 0.5rem 0 0.25rem;
+    font-size: 0.95rem;
+    font-weight: 700;
+  }
+
+  .markdown :global(p) {
+    margin: 0.25rem 0;
+  }
+
+  .markdown :global(ul),
+  .markdown :global(ol) {
+    margin: 0.25rem 0;
+    padding-left: 1.25rem;
+  }
+
+  .markdown :global(code) {
+    font-size: 0.8rem;
+    background: rgba(0, 0, 0, 0.06);
+    padding: 0.1rem 0.3rem;
+    border-radius: 0.2rem;
+  }
+
+  .markdown :global(pre) {
+    margin: 0.5rem 0;
+    padding: 0.5rem;
+    background: rgba(0, 0, 0, 0.06);
+    border-radius: 0.375rem;
+    overflow-x: auto;
+    font-size: 0.8rem;
+  }
+
+  .markdown :global(pre code) {
+    background: none;
+    padding: 0;
+  }
+
+  .markdown :global(blockquote) {
+    margin: 0.25rem 0;
+    padding-left: 0.75rem;
+    border-left: 3px solid rgba(0, 0, 0, 0.15);
+    color: #6b7280;
   }
 
   .edit-instruction {

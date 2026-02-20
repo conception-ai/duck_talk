@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.41.0",
+    "marked": "^17.0.3",
     "svelte-spa-router": "^4.0.1"
   }
 }
