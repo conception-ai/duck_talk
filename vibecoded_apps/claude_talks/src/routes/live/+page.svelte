@@ -303,17 +303,26 @@
     <div class="toast">{live.toast}</div>
   {/if}
 
-  <!-- Mic orb -->
-  <div class="mic-area">
-    <span class="mode-label">{MODE_LABELS[ui.mode]}</span>
+  <!-- Input bar -->
+  <div class="input-bar">
+    <span class="mode-badge">{MODE_LABELS[ui.mode]}</span>
+    {#if live.status === 'connected'}
+      <div class="waveform">
+        {#each [1.0, 0.8, 1.15, 0.85, 1.05] as dur, i}
+          <span class="wave-bar" style="animation-duration: {dur}s; animation-delay: {i * 0.12}s"></span>
+        {/each}
+      </div>
+    {:else}
+      <textarea class="input-field" placeholder="Reply..." disabled rows="1"></textarea>
+    {/if}
     <button
-      class="mic-orb"
+      class="mic-btn"
       class:connected={live.status === 'connected'}
       class:connecting={live.status === 'connecting'}
       disabled={live.status === 'connecting'}
       onclick={() => live.status === 'idle' ? live.start() : live.stop()}
     >
-      <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
         <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
       </svg>
     </button>
@@ -553,7 +562,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 0.5rem 0;
+    padding: 0.5rem 0 5rem;
   }
 
   .msg {
@@ -833,26 +842,85 @@
     40% { opacity: 1; transform: scale(1); }
   }
 
-  /* Mic orb */
-  .mic-area {
+  /* Input bar */
+  .input-bar {
+    position: fixed;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(600px, calc(100vw - 2rem));
     display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 1.5rem 0;
+    align-items: flex-end;
+    gap: 0.5rem;
+    padding: 0.5rem 0.5rem 0.5rem 0.75rem;
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 1.25rem;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+    z-index: 50;
   }
 
-  .mode-label {
-    font-size: 0.75rem;
+  .mode-badge {
+    position: absolute;
+    top: -0.5rem;
+    left: 1rem;
+    font-size: 0.6rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: #9ca3af;
+    background: white;
+    padding: 0 0.25rem;
   }
 
-  .mic-orb {
+  .waveform {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 0.35rem 0;
+  }
+
+  .wave-bar {
+    width: 3px;
+    height: 20px;
+    border-radius: 1.5px;
+    background: #059669;
+    animation: wave 1s ease-in-out infinite;
+  }
+
+  @keyframes wave {
+    0%, 100% { transform: scaleY(0.15); }
+    50% { transform: scaleY(1); }
+  }
+
+  .input-field {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-family: inherit;
+    font-size: 0.9rem;
+    resize: none;
+    padding: 0.35rem 0;
+    line-height: 1.4;
+    color: #374151;
+  }
+
+  .input-field::placeholder {
+    color: #9ca3af;
+  }
+
+  .input-field:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  .mic-btn {
     position: relative;
-    width: 64px;
-    height: 64px;
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
     border: none;
     background: #e5e7eb;
@@ -864,21 +932,21 @@
     padding: 0;
   }
 
-  .mic-orb:disabled {
+  .mic-btn:disabled {
     cursor: default;
   }
 
-  .mic-orb.connecting {
+  .mic-btn.connecting {
     animation: gentle-pulse 1.5s ease-in-out infinite;
   }
 
-  .mic-orb.connected {
+  .mic-btn.connected {
     background: #059669;
     color: white;
   }
 
-  .mic-orb.connected::before,
-  .mic-orb.connected::after {
+  .mic-btn.connected::before,
+  .mic-btn.connected::after {
     content: '';
     position: absolute;
     inset: 0;
@@ -887,13 +955,13 @@
     animation: pulse-ring 2s ease-out infinite;
   }
 
-  .mic-orb.connected::after {
+  .mic-btn.connected::after {
     animation-delay: 1s;
   }
 
   @keyframes pulse-ring {
     0% { transform: scale(1); opacity: 0.5; }
-    100% { transform: scale(2.2); opacity: 0; }
+    100% { transform: scale(1.8); opacity: 0; }
   }
 
   @keyframes gentle-pulse {
