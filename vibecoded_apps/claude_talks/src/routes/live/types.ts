@@ -10,23 +10,11 @@ export interface RecordedChunk {
   data: string; // base64 PCM
 }
 
-export interface ToolCall {
-  name: string;
-  args: Record<string, unknown>;
-}
-
 export interface PendingTool {
   name: string;
   args: Record<string, unknown>;
   text: string;
   streaming: boolean;
-}
-
-export interface Turn {
-  role: 'user' | 'assistant';
-  text: string;
-  toolCall?: ToolCall;
-  toolResult?: string;
 }
 
 export type Status = 'idle' | 'connecting' | 'connected';
