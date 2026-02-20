@@ -14,10 +14,10 @@ Your code must be clean, minimalist and easy to read.
 | @vibecoded_apps/CLAUDE.md | Svelte app conventions |
 | @vibecoded_apps/claude_talks/src/routes/home/+page.svelte | Home page — session list, fetches `GET /api/sessions`, navigates to `/live/:id` |
 | @vibecoded_apps/claude_talks/src/App.svelte | Router — `/` → HomePage, `/live` → LivePage (blank), `/live/:id` → LivePage (with loaded session) |
-| @vibecoded_apps/claude_talks/src/routes/live/+page.svelte | Gemini Live — accepts route `params.id`, loads history on mount, renders `messages[]` (CC conversation) + `voiceLog[]` (ephemeral) + pending overlays |
+| @vibecoded_apps/claude_talks/src/routes/live/+page.svelte | Gemini Live — 3-item header (Home, title, Settings gear), messages area, mic orb (bottom center, tap to start/stop, CSS pulse when connected), unified Settings modal (API key, voice, mode, model, prompt). Loads history on mount, renders `messages[]` + `voiceLog[]` + pending overlays |
 | @vibecoded_apps/claude_talks/src/routes/live/types.ts | Port interfaces (DataStoreMethods with `back()`, AudioPort, LiveBackend, ConverseApi with `abort()`, RealtimeInput) + CC message types (`ContentBlock`, `Message`, `VoiceEvent`) + `InteractionMode` (`'direct' \| 'review' \| 'correct'`) + correction types (STTCorrection, PendingApproval) |
 | @vibecoded_apps/claude_talks/src/routes/live/stores/data.svelte.ts | Data store — two-array model: `messages[]` (CC conversation, mutable) + `voiceLog[]` (ephemeral, append-only). `loadHistory()`, `back()`, session lifecycle, audio buffer, approval flow |
-| @vibecoded_apps/claude_talks/src/routes/live/stores/ui.svelte.ts | UI store — persistent user prefs (voiceEnabled, apiKey, mode: InteractionMode, pttMode). `cycleMode()` rotates direct → review → correct. Migrates old `learningMode: boolean` on load |
+| @vibecoded_apps/claude_talks/src/routes/live/stores/ui.svelte.ts | UI store — persistent user prefs (voiceEnabled, apiKey, mode: InteractionMode, model, systemPrompt). `setMode()` sets mode directly. `load()` merges localStorage with `DEFAULTS` so new fields get populated. Migrates old `learningMode: boolean` on load |
 | @vibecoded_apps/claude_talks/src/routes/live/stores/corrections.svelte.ts | Corrections store — localStorage-persisted STT corrections |
 | @vibecoded_apps/claude_talks/src/routes/live/gemini.ts | Gemini Live connection + message handling. 3-way mode branching (direct/review/correct) in tool call handler. No correction logic in Gemini layer — corrections are handled externally via `correctInstruction` dep |
 | @vibecoded_apps/claude_talks/src/routes/live/correct.ts | Stateless LLM auto-correction — `correctInstruction(llm, instruction, corrections)`. Text-only today, planned: multimodal with audio (see `roadmap/todos/correction_llm_accuracy.md`) |
@@ -63,7 +63,7 @@ Your code must be clean, minimalist and easy to read.
 - **Function calling**: `tools.ts` declares `TOOLS` (uses `Type` enum from SDK) + `handleToolCall()` (pure fetch). The `converse` tool is `NON_BLOCKING` + `SILENT` response — Gemini speaks an acknowledgment while Claude streams in the background. Chunks are fed back via `sendClientContent` so Gemini reads them aloud. The handler lives in `gemini.ts` (not `tools.ts`) because it needs the session ref.
 - **`accept_instruction` is a meta-tool** (`gemini.ts`): Unlike `converse`, it acts on existing state — it calls `data.approve()` to accept the pending converse instruction. Critical: it MUST skip `startTool()` (would overwrite the pending `converse` tool) and sends a plain blocking response. `approve()` is on both the public store surface (UI button) and `DataStoreMethods` port (voice tool) — same function, no divergence, race-safe (second call is a no-op via `if (!pendingApproval) return` guard).
 - **Converse phase gating** (`gemini.ts`): A `conversePhase` state machine (`idle` → `suppressing` → `relaying` → `idle`) gates both audio and text during converse. Key non-obvious timing: Gemini sends "Asking Claude" audio/text BEFORE the `toolCall` message arrives, so the ack naturally passes through while `conversePhase` is still `idle`. After the tool call, `suppressing` blocks Gemini's own audio + flushes the player. On first `sendClientContent` (Claude chunk), `relaying` re-enables audio (Gemini reads Claude aloud) but keeps blocking `outputTranscription` (the `[CLAUDE]:` echo is noise — Claude's text is already in `pendingTool.text` via `appendTool`). `holdForApproval` takes an optional `cancel` callback to reset the phase on reject.
-- **Svelte app**: Gemini API key is stored client-side in `localStorage` (`claude-talks:ui`), managed via modal in `ui.svelte.ts`. Flows through DI: `ui.apiKey` → `data.svelte.ts` (`getApiKey` dep) → `gemini.ts` (`ConnectDeps.apiKey`). Modal auto-opens on first visit if no key is set.
+- **Svelte app**: Gemini API key is stored client-side in `localStorage` (`claude-talks:ui`), managed via unified Settings modal in `+page.svelte`. Flows through DI: `ui.apiKey` → `data.svelte.ts` (`getApiKey` dep) → `gemini.ts` (`ConnectDeps.apiKey`). Settings modal auto-opens on first visit if no key is set.
 - **Claude SDK isolation**: The SDK subprocess must be fully isolated from the parent Claude Code session. Three layers:
   1. `os.environ.pop("CLAUDECODE", None)` at import time — prevents "nested session" error
   2. `cli_path` → `~/.claude-sdk/cli/node_modules/.bin/claude` — separate binary
@@ -72,7 +72,7 @@ Your code must be clean, minimalist and easy to read.
 - **SDK setup** (one-time): `npm install @anthropic-ai/claude-code --prefix ~/.claude-sdk/cli` then `CLAUDECODE= CLAUDE_CONFIG_DIR=~/.claude-sdk ~/.claude-sdk/cli/node_modules/.bin/claude login`
 - **SDK client lifetime**: `ClaudeSDKClient` goes stale after the first `receive_response()` — the second `query()` hangs forever. Use the standalone `query()` function instead, with `resume=session_id` (captured from `ResultMessage.session_id`) to maintain conversation across calls. Each call spawns a fresh subprocess but resumes the same session.
 - **SDK cwd constraint**: Setting `cwd` to a path inside `~/.claude/` causes the SDK subprocess to hang (observed, root cause unknown). This affects any project located under the Claude config directory, not just this one. Workaround: use a temp dir or a path outside `~/.claude/`.
-- **Interaction mode** (`ui.svelte.ts`): 3-way cycle button — `direct` → `review` → `correct`. Persisted in localStorage (`claude-talks:ui` as `mode`).
+- **Interaction mode** (`ui.svelte.ts`): 3-way mode selector in Settings modal — `direct`, `review`, `correct`. Persisted in localStorage (`claude-talks:ui` as `mode`).
   - **`direct`** — tool calls execute immediately, no approval UI.
   - **`review`** — single-stage approval: user sees instruction, Accept/Edit/Reject. If user edits, the diff is saved as a correction in `corrections.svelte.ts`. Acceptance can come from UI button OR Gemini's `accept_instruction` tool (voice).
   - **`correct`** — LLM auto-corrects instruction via `correct.ts`, then shows single-stage approval with the corrected text. `rawInstruction` on `PendingApproval` tracks the original for correction bookkeeping.
@@ -82,11 +82,7 @@ Your code must be clean, minimalist and easy to read.
   - Approval UI is in the pending tool bubble (not user turn bubble). Shows `pendingApproval.instruction` (corrected) when approval is active, falls back to `pendingTool.args.instruction` when streaming.
 - **LLM correction timing** (`correct` mode): the `correctInstruction` call fires synchronously when the tool call arrives, but it's async (~2s round-trip to Gemini Flash). During those 2s the user sees a pending tool with no approval buttons. Gemini sends `turnComplete` during this window. The `.then()` callback in `gemini.ts:210` is where `holdForApproval` finally gets called. On LLM error, falls back to uncorrected instruction.
 - **`correctInstruction` DI closure** (`+page.svelte:28-32`): the closure creates `createLLM({ apiKey })` on each call. This is safe — `llm.ts` caches clients by API key internally (`getClient()`). The closure also reads `corrections.corrections` at call time (not creation time), so corrections added mid-session are picked up.
-- **Push-to-talk (PTT)**: `pttMode` toggle in ui store. When on, Gemini's automatic VAD is disabled (`realtimeInputConfig.automaticActivityDetection.disabled: true`) and the user explicitly brackets speech with a hold-to-talk button. Key details:
-  - **Session-level config** — VAD vs PTT is set at `ai.live.connect()` time. Can't toggle mid-session. UI disables the toggle when `status !== 'idle'`. Must stop + restart to switch modes.
-  - **`sendRealtimeInput` widened** — `LiveBackend.sendRealtimeInput` takes a `RealtimeInput` object (`{ audio?, activityStart?, activityEnd? }`) matching the SDK shape. In `gemini.ts` it's a pure pass-through: `(input) => session.sendRealtimeInput(input)`. All audio call sites use `{ audio: { data, mimeType } }`.
-  - **Mic gating** — mic runs continuously in both modes. One guard in the callback: `if (pttMode && !pttActive) return;`. This avoids re-initializing AudioContext/worklet on each press. `pttPress()` sets the flag + sends `activityStart`; `pttRelease()` clears it + sends `activityEnd`.
-  - **`pttMode` is non-reactive in data store** — plain `let`, set once at `start()` from `deps.getPttMode()`. UI reads `ui.pttMode` directly (not from data store). `pttActive` IS reactive (`$state`) for UI button feedback.
+- **UI layout** (`+page.svelte`): Header has 3 items: Home | Gemini Live | Settings (gear). Mic orb at bottom center — grey when idle (tap to start), green with CSS pulse rings when connected (tap to stop). Always VAD, no PTT. Settings modal consolidates: API key, voice on/off, mode, model, system prompt, corrections link. Auto-opens on first visit if no API key.
 
 ## Locations & commands
 
@@ -127,12 +123,11 @@ Or use **Chrome MCP** `evaluate_script` with `fetch()` — browser stdout works 
 **Programmatic audio injection** — no mic needed, no saved recordings:
 > Uses `getUserMedia` override + TTS to inject synthetic speech. No production code changes.
 > 1. `navigate_page` to `http://localhost:5000/#/live` with `initScript` that overrides `getUserMedia` and exposes `window.__injectAudio(base64pcm, sampleRate)`. See plan `eventual-roaming-scroll.md` for the full initScript.
-> 2. Click Start (VAD mode). Wait for `[live] connected` in console.
+> 2. Click the mic orb. Wait for `[live] connected` in console.
 > 3. `evaluate_script`: `const { speak } = await import('/src/lib/tts.ts');` → `speak(key, 'Say naturally: <prompt> OVER')` → `window.__injectAudio(data, sampleRate)`.
 > 4. Verify: console shows `[test] injected N samples` → `[user STT] <transcription>` → `tool call: converse`.
 >
 > **Critical**: initScript MUST be set on `navigate_page` BEFORE clicking Start — the override must be in place when `getUserMedia` is first called. Navigating then injecting the script after load is too late.
-> **VAD only**: injection relies on VAD to detect end-of-speech from silence. PTT mode won't work (no button press/release signals).
 > **Dynamic import**: `import('/src/lib/tts.ts')` works because Vite dev server serves `.ts` source files at their path. If it breaks, inline the TTS API call directly in `evaluate_script`.
 ## Instructions
 
