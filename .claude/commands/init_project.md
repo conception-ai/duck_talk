@@ -121,14 +121,26 @@ Or use **Chrome MCP** `evaluate_script` with `fetch()` — browser stdout works 
 ### E2E testing (Chrome MCP)
 
 **Programmatic audio injection** — no mic needed, no saved recordings:
-> Uses `getUserMedia` override + TTS to inject synthetic speech. No production code changes.
-> 1. `navigate_page` to `http://localhost:5000/#/live` with `initScript` that overrides `getUserMedia` and exposes `window.__injectAudio(base64pcm, sampleRate)`. See plan `eventual-roaming-scroll.md` for the full initScript.
-> 2. Click the mic orb. Wait for `[live] connected` in console.
-> 3. `evaluate_script`: `const { speak } = await import('/src/lib/tts.ts');` → `speak(key, 'Say naturally: <prompt> OVER')` → `window.__injectAudio(data, sampleRate)`.
-> 4. Verify: console shows `[test] injected N samples` → `[user STT] <transcription>` → `tool call: converse`.
+> Uses `test-inject.ts` module + TTS to inject synthetic speech. No `initScript` needed.
+> 1. `navigate_page` to `http://localhost:5000/#/live`
+> 2. `evaluate_script`: setup fake mic (BEFORE clicking Start)
+>    ```js
+>    const { setup } = await import('/src/lib/test-inject.ts');
+>    setup();
+>    ```
+> 3. Click the mic orb. Wait for `[live] connected` in console.
+> 4. `evaluate_script`: generate TTS + inject
+>    ```js
+>    const { inject } = await import('/src/lib/test-inject.ts');
+>    const { speak } = await import('/src/lib/tts.ts');
+>    const key = JSON.parse(localStorage.getItem('claude-talks:ui') || '{}').apiKey;
+>    const { data, sampleRate } = await speak(key, 'What are my todos in the todos folder? OVER.');
+>    inject(data, sampleRate);
+>    ```
+> 5. Verify: console shows `[test] injected N samples` → `[user STT]` → `tool call: converse` → `[converse] TTFT: Nms`
 >
-> **Critical**: initScript MUST be set on `navigate_page` BEFORE clicking Start — the override must be in place when `getUserMedia` is first called. Navigating then injecting the script after load is too late.
-> **Dynamic import**: `import('/src/lib/tts.ts')` works because Vite dev server serves `.ts` source files at their path. If it breaks, inline the TTS API call directly in `evaluate_script`.
+> **Critical**: `setup()` must run BEFORE clicking Start — the getUserMedia override must be in place when the app first calls it.
+> **VAD only**: injection relies on VAD to detect end-of-speech from silence.
 ## Instructions
 
 Read, digest then ask me questions if needed.
