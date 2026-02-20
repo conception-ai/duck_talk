@@ -109,8 +109,6 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
   let userSpokeInTurn = false;
 
   async function handleMessage(message: LiveServerMessage) {
-    console.log(`[${tag}] message:`, JSON.stringify(message).slice(0, 300));
-
     // --- Tool calls ---
     if (message.toolCall?.functionCalls) {
       userSpokeInTurn = false; // Tool was called, don't nudge
@@ -161,10 +159,6 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
           const executeConverse = (approvedInstruction: string) => {
             converseApi.stream(approvedInstruction, {
               onChunk(text) {
-                console.log(
-                  `[converse] chunk: session=${!!sessionRef}`,
-                  text.slice(0, 80),
-                );
                 // Store Claude's text in the tool result (visible in UI)
                 data.appendTool(text);
                 if (sessionRef) {
@@ -254,6 +248,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
 
     // User speech — always pass through, even during converse.
     if (sc.inputTranscription?.text) {
+      console.log(`[user STT] ${sc.inputTranscription.text}`);
       data.appendInput(sc.inputTranscription.text);
       userSpokeInTurn = true;
     }
@@ -263,6 +258,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
     // "Asking Claude" arrives BEFORE the toolCall message, so it naturally
     // passes through while conversePhase is still 'idle'.
     if (sc.outputTranscription?.text && conversePhase === 'idle') {
+      console.log(`[gemini] ${sc.outputTranscription.text}`);
       data.appendOutput(sc.outputTranscription.text);
     }
 
@@ -278,7 +274,6 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
     }
 
     if (sc.turnComplete) {
-      console.log(`[${tag}] turn complete`);
       data.commitTurn();
 
       // Nudge: Gemini completed without calling converse after user spoke

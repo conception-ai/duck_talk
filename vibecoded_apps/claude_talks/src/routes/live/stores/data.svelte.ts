@@ -278,7 +278,6 @@ export function createDataStore(deps: DataStoreDeps) {
     if (!backend) return;
 
     try {
-      console.log('[live] starting mic...');
       mic = await audio.startMic((base64) => {
         if (pttMode && !pttActive) return;
         audioBuffer.push({ ts: Date.now() - sessionStart, data: base64 });
@@ -286,7 +285,6 @@ export function createDataStore(deps: DataStoreDeps) {
           audio: { data: base64, mimeType: 'audio/pcm;rate=16000' },
         });
       });
-      console.log('[live] mic started');
     } catch (e: unknown) {
       console.error('[live] mic failed:', e);
       pushError(`Mic failed: ${e instanceof Error ? e.message : String(e)}`);

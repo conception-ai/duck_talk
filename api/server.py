@@ -21,7 +21,7 @@ log = logging.getLogger("api")
 _PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 _SYSTEM_PROMPT = (_PROMPT_DIR / "conversational_tone.md").read_text()
 
-log.info("system prompt loaded (%d chars):\n%s", len(_SYSTEM_PROMPT), _SYSTEM_PROMPT)
+log.info("system prompt loaded (%d chars)", len(_SYSTEM_PROMPT))
 
 app = FastAPI()
 claude = Claude(cwd="/Users/dhuynh95/claude_talks", system_prompt=_SYSTEM_PROMPT)
@@ -235,19 +235,16 @@ async def converse(body: ConverseRequest) -> StreamingResponse:
             body.instruction, session_id=body.session_id
         ):
             if isinstance(chunk, TextDelta):
-                log.info("raw delta: %s", chunk.text[:120])
                 buf += chunk.text
                 while (idx := _sentence_break(buf)) >= 0:
                     sentence = buf[: idx + 1].strip()
                     buf = buf[idx + 1 :]
                     if sentence:
                         n_chunks += 1
-                        log.info("chunk %d: %s", n_chunks, sentence[:80])
                         yield _sse({"text": sentence})
             else:
                 if buf.strip():
                     n_chunks += 1
-                    log.info("chunk %d (flush): %s", n_chunks, buf.strip()[:80])
                     yield _sse({"text": buf.strip()})
                 log.info(
                     "done: %d chunks, cost=$%s, %dms",

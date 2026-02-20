@@ -106,4 +106,3 @@ class Claude:
                     cost_usd=msg.total_cost_usd,
                     duration_ms=msg.duration_ms,
                 )
-        log.info("response complete")

@@ -30,12 +30,11 @@ export function createConverseApi(endpoint = '/api/converse'): ConverseApi {
           onError(`Claude Code request failed (${res.status}).`);
           return;
         }
-        console.log('[converse] SSE stream opened');
-
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
         let nChunks = 0;
+        let fullText = '';
 
         for (;;) {
           const { done, value } = await reader.read();
@@ -51,19 +50,18 @@ export function createConverseApi(endpoint = '/api/converse'): ConverseApi {
             const data = JSON.parse(line.slice(6));
             if (data.text) {
               nChunks++;
-              console.log(`[converse] chunk ${nChunks}:`, data.text.slice(0, 80));
+              fullText += data.text;
               onChunk(data.text);
             }
             if (data.done) {
               if (data.session_id) sessionId = data.session_id;
               console.log(
-                `[converse] done: ${nChunks} chunks, cost=$${data.cost_usd}, ${data.duration_ms}ms, session=${sessionId}`,
+                `[converse] done: ${nChunks} chunks, cost=$${data.cost_usd}, ${data.duration_ms}ms, session=${sessionId}\n[claude] ${fullText}`,
               );
               onDone?.(data.cost_usd, data.duration_ms);
             }
           }
         }
-        console.log('[converse] stream closed');
       } catch (e) {
         console.error('[converse] SSE error:', e);
         onError('Claude Code request failed.');
