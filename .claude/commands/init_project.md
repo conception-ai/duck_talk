@@ -32,7 +32,7 @@ Your code must be clean, minimalist and easy to read.
 | File | Purpose |
 |------|---------|
 | docs/gemini-live-docs.md | Gemini Live API reference — capabilities, VAD config, function calling, session management |
-| @vibecoded_apps/claude_talks/src/lib/tts.ts | Test-only TTS utility — `speak(apiKey, text)` → base64 PCM at 24kHz via Gemini TTS. Dynamically imported by Chrome MCP test scripts (`import('/src/lib/tts.ts')`), never imported by production code |
+| @vibecoded_apps/claude_talks/src/lib/tts.ts | Test-only TTS utility — `speak(apiKey, text)` → base64 PCM at 24kHz via Gemini TTS. Dynamically imported by Claude in Chrome test scripts (`import('/src/lib/tts.ts')`), never imported by production code |
 
 ## Guiding Principles
 
@@ -114,22 +114,27 @@ with urllib.request.urlopen(req, timeout=60) as r:
 " ; cat /tmp/api_test.txt
 ```
 
-Or use **Chrome MCP** `evaluate_script` with `fetch()` — browser stdout works fine.
+Or use **Claude in Chrome** `javascript_tool` with `fetch()` — browser stdout works fine.
 
 **`uvicorn --reload` doesn't reload transitive imports.** If you change `claude_client.py` (or any module imported by `server.py`), you must kill and restart the server process. `--reload` only re-imports the entry module.
 
-### E2E testing (Chrome MCP)
+### E2E testing (Claude in Chrome)
+
+**Prerequisite**: Claude in Chrome MCP tools (`mcp__claude-in-chrome__*`) must be available. If they are not, tell the user to restart with `claude --chrome` to enable browser automation.
+
+**Key tools**: `tabs_context_mcp` (get tab IDs), `tabs_create_mcp` (new tab), `navigate` (go to URL), `javascript_tool` (execute JS), `computer` (click/screenshot), `find` (locate elements), `read_page` (a11y tree), `read_console_messages` (console output). All take a `tabId` parameter — multiple tabs can be automated in parallel.
 
 **Programmatic audio injection** — no mic needed, no saved recordings:
-> Uses `test-inject.ts` module + TTS to inject synthetic speech. No `initScript` needed.
-> 1. `navigate_page` to `http://localhost:5000/#/live`
-> 2. `evaluate_script`: setup fake mic (BEFORE clicking Start)
+> Uses `test-inject.ts` module + TTS to inject synthetic speech.
+> 1. `tabs_context_mcp` → get existing tabs, then `tabs_create_mcp` if needed to get a `tabId`
+> 2. `navigate` with `tabId` + `url: "http://localhost:5000/#/live"`
+> 3. `javascript_tool`: setup fake mic (BEFORE clicking Start)
 >    ```js
 >    const { setup } = await import('/src/lib/test-inject.ts');
 >    setup();
 >    ```
-> 3. Click the mic orb. Wait for `[live] connected` in console.
-> 4. `evaluate_script`: generate TTS + inject
+> 4. Click the mic orb (use `find` to locate it, then `computer` to click). Wait for `[live] connected` via `read_console_messages` with `pattern: "connected"`.
+> 5. `javascript_tool`: generate TTS + inject
 >    ```js
 >    const { inject } = await import('/src/lib/test-inject.ts');
 >    const { speak } = await import('/src/lib/tts.ts');
@@ -137,7 +142,7 @@ Or use **Chrome MCP** `evaluate_script` with `fetch()` — browser stdout works 
 >    const { data, sampleRate } = await speak(key, 'What are my todos in the todos folder? OVER.');
 >    inject(data, sampleRate);
 >    ```
-> 5. Verify: console shows `[test] injected N samples` → `[user STT]` → `tool call: converse` → `[converse] TTFT: Nms`
+> 6. Verify via `read_console_messages`: `[test] injected N samples` → `[user STT]` → `tool call: converse` → `[converse] TTFT: Nms`
 >
 > **Critical**: `setup()` must run BEFORE clicking Start — the getUserMedia override must be in place when the app first calls it.
 > **VAD only**: injection relies on VAD to detect end-of-speech from silence.
