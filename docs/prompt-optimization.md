@@ -1,116 +1,126 @@
-# Iterative Prompt Optimization for Voice Agents
+# Iterative Prompt Optimization
 
-How to systematically improve a system prompt when an LLM's output is consumed by voice (TTS), not text.
+A systematic method for improving LLM system prompts through controlled experimentation instead of vibes.
 
-## Why voice is different
+## The problem with prompt editing
 
-A paragraph that takes 2 seconds to read takes 15 seconds to listen to. The user can't skim, can't scroll back, can't cmd-F. Verbosity is 7x more expensive in voice than in text. This changes what "good output" means — brevity is not a style preference, it's a usability constraint.
+The default approach is: edit the prompt, try it, see if it "feels better." This fails because:
+- You can't tell what changed if you changed the prompt AND the input
+- You can't tell if improvement on one input broke another
+- You remember the bad output but not the good parts you lost
+- You optimize for the last failure you saw, not the overall distribution
 
-## The core insight
+## The method
 
-Most prompts address **formatting** (no markdown, use contractions, be natural) but not **information volume**. Telling an LLM "talk naturally" produces natural-sounding walls of text. The fix is to constrain *how much* to say, not just *how* to say it.
+The core idea is borrowed from experimental science: hold inputs constant, vary the prompt, measure outputs. This turns prompt engineering from art into iteration.
 
-Three layers of the problem:
-1. **No length constraint** — the prompt never says "2-3 sentences"
-2. **No progressive disclosure signal** — the model doesn't know to stop and let the user pull more
-3. **No medium awareness** — the model doesn't understand the cost of verbosity in audio
+### Step 1: Collect evidence from production
 
-## Method: Replay-based A/B testing
+Don't invent test cases. Find a real conversation that exhibits the problem. Load it, dump every message, read the actual outputs. The real conversation contains failure modes you wouldn't think to script.
 
-### Setup
+In our case: we loaded a JSONL session file, extracted all user/assistant text along the active conversation path, and read through every message untruncated. This revealed that assistant responses were 1,900-3,500 characters — full specification dumps spoken aloud through TTS.
 
-You need:
-- A backend that accepts a system prompt as a parameter (not hardcoded)
-- A way to replay the same conversation turns against different prompts
-- Session continuity (same session ID across turns) so context builds naturally
+### Step 2: Diagnose the root cause, not the symptom
 
-### The loop
+Don't start with "make it shorter." Ask WHY it's long.
 
-1. **Pick a representative conversation.** 3-5 turns that cover the behaviors you care about: a simple question, a multi-part answer, a "tell me more" follow-up. Real conversations from production are best — they expose failure modes you wouldn't script.
+Separate the layers:
+- Is the prompt addressing the right dimension? (formatting vs. information volume vs. structure)
+- Is there a missing constraint? (no length cap, no stop signal)
+- Is there a wrong mental model? (the LLM thinks it's writing a document, not having a conversation)
 
-2. **Run the baseline.** Send the conversation turns with the current prompt. Save every response with its character count. This is your control.
+We found the existing prompt addressed **formatting** (no markdown, use contractions) but not **information dosing** (how much to say). That's a category error — like fixing a flooding problem by changing the color of the pipes.
 
-3. **Hypothesize.** Don't just tweak words. Identify the *category* of problem:
-   - Too long? → Add a length constraint with a number ("2-3 sentences")
-   - Unnecessary preamble? → Add "skip filler phrases" with concrete anti-examples
-   - No invitation to go deeper? → Add "end with a hook"
-   - Missing information? → Loosen a constraint or add a carve-out
+### Step 3: Form a specific hypothesis
 
-4. **Replay with the new prompt.** Same turns, fresh session. Compare character counts AND content quality. A shorter response that drops critical information is worse, not better.
+Not "make the prompt better." A testable claim:
 
-5. **Analyze per-turn.** Don't just look at averages. Each turn type (simple question, enumeration, elaboration) may need different treatment. A prompt that nails turn 1 might still fail on turn 3.
+- "Adding a hard sentence count (2-3 sentences) will reduce response length by >50%"
+- "Adding 'skip filler phrases' with anti-examples will eliminate narration overhead"
+- "Adding 'end with a hook' will make short answers feel complete instead of abrupt"
 
-6. **Iterate.** Usually 2-3 rounds is enough. Diminishing returns after that — at some point you're overfitting to your test conversation.
+Each hypothesis targets one dimension. You can stack them, but you should know which one is doing the work.
 
-### What to measure
+### Step 4: Replay the same conversation
 
-- **Character count per turn.** The primary signal. Voice output should be dramatically shorter than text output — 60-90% reduction is typical and correct.
-- **Information completeness.** Did the model answer what was asked? Brevity that drops the answer is a regression.
-- **Progressive disclosure hooks.** Does the response end with a way for the user to go deeper? ("Want details?" / "Should I dig in?") These are load-bearing — without them, brevity feels like the model is withholding.
-- **Filler ratio.** How many words are "let me check" / "I'll look into that" / "great question" vs. actual content? In voice, every filler phrase is stolen attention.
+This is the key move that makes it scientific:
 
-## What we learned
+1. Take the exact same user turns from your evidence conversation (Step 1)
+2. Send them to the LLM with the new prompt
+3. **Use session continuity** — same session ID across turns so context builds naturally
+4. Record every response with its character count
 
-### Rules that worked (high impact)
+Same inputs. Different prompt. Fresh session. Controlled comparison.
 
-**Hard length cap with a number.** "2-3 sentences by default. Maximum 5 even when asked to elaborate." Vague instructions like "be concise" do almost nothing. A concrete number works.
+### Step 5: Analyze per-turn, not in aggregate
 
-**"Skip filler phrases" with anti-examples.** Telling the model *not* to say "let me check that for you" or "let me read the file" eliminated 20-30% of wasted output. The anti-examples are key — without them, the model doesn't know what counts as filler.
+Different turn types stress different prompt behaviors:
+- A simple factual question tests baseline conciseness
+- A "list things" request tests enumeration strategy
+- A "tell me more" follow-up tests progressive disclosure depth
 
-**"End with a hook."** This is the progressive disclosure mechanism. "Want the implementation details?" or "Should I dig into any of those?" turns a dead-end answer into a conversation. Without this rule, concise answers feel abrupt.
+A prompt that nails turn 1 might still fail on turn 3. Look at each turn individually. For each one ask:
+- Is the length appropriate?
+- Is the information complete? (Brevity that drops the answer is a regression)
+- Is the tone right?
+- Does it invite follow-up or dead-end?
 
-### Rules that didn't matter much
+### Step 6: Hypothesize again from the analysis
 
-**"Talk like a coworker"** — the model already does this naturally. Including it doesn't hurt but it's not the lever.
-
-**Formatting rules** (no markdown, no bullets) — necessary but not sufficient. The model can produce perfectly formatted walls of text.
-
-### The progressive disclosure mental model
-
-Think of it as a CEO briefing. The assistant gives the minimum decision-quality information, then waits. The user steers: "tell me more," "what about X," "skip to the action items." The model calibrates depth to the question.
-
-Concretely this means:
-- "List the todos" → count + one-line summary + "which one interests you?"
-- "Tell me more about X" → the what + the why + what's left to do + "want implementation details?"
-- "Give me everything" → now you can go deep
-
-Each "tell me more" should go exactly one level deeper, not dump everything remaining.
-
-### Counterfactual: what if we'd only changed formatting?
-
-The original prompt already said "no markdown, use contractions, be natural." Responses were 1,900-3,500 characters — full specs read aloud. Formatting rules alone reduce character count by maybe 10-15% (removing markdown syntax). The length constraint + progressive disclosure rules produced 60-90% reduction. The leverage is overwhelmingly in information dosing, not formatting.
-
-## Prompt template (starting point for future iterations)
+Round 1 results generate Round 2 hypotheses. This is the iteration loop:
 
 ```
-Your output will be spoken aloud through text-to-speech. You are having a live voice conversation.
-
-BREVITY IS EVERYTHING. The user is LISTENING, not reading. Every extra sentence costs 5-10 seconds of their attention.
-
-How to answer:
-- 2-3 sentences by default. Maximum 5 even when asked to elaborate.
-- Give the minimum needed to be useful, then stop.
-- If there are multiple items, give the count and a one-line overview. Let the user pick what to expand.
-- When asked "tell me more", go ONE level deeper. Not everything. End with a hook so the user can pull more.
-- Never dump a full spec or plan unless the user explicitly asks for exhaustive detail.
-
-How to talk:
-- Short sentences. Contractions. Skip filler phrases — don't narrate actions, just give results.
-- No markdown. No bullets. No code fences. Everything is plain speech.
-- Say code references naturally. Spell out symbols.
+evidence → diagnosis → hypothesis → experiment → analysis → new hypothesis → ...
 ```
 
-## Reproducing the experiment
+Usually 2-3 rounds is enough. You hit diminishing returns quickly — at that point you're overfitting to your test conversation. When two consecutive rounds produce similar quality, ship it.
 
-Pick any 3-turn conversation. Send each turn to the LLM backend with the system prompt as a parameter, reusing the session ID across turns. Compare response lengths and quality. The test script pattern:
+### Step 7: Ship and document
 
-```
-for each prompt variant:
-    session_id = null
-    for each turn in conversation:
-        response, session_id = call_backend(turn, system_prompt, session_id)
-        record(response, len(response))
-    compare with previous variant
-```
+Write the winning prompt to the actual file. Document what you tested and what you learned so the next person (or you in 3 months) doesn't re-derive everything from scratch.
 
-No special tooling needed — a curl loop or a short Python script works. The key is same turns, fresh session, controlled comparison.
+## What makes this work
+
+**Holding inputs constant** is the entire trick. Without it, you're changing two variables at once (prompt AND input) and can't attribute outcomes. With it, you can see exactly what each prompt change does.
+
+**Skipping the baseline when you have production evidence.** If you already loaded a real conversation and saw the problem, you don't need to re-run it — you have the data. Jump straight to your first hypothesis. We skipped Round 0 because the session dump WAS the baseline.
+
+**Per-turn analysis over aggregate metrics.** Average response length is misleading. A prompt that produces one perfect answer and one terrible answer has the same average as a prompt that produces two mediocre answers. Look at each turn.
+
+**Anti-examples in constraints.** "Be concise" does nothing. "Skip filler phrases — don't say 'let me check that for you' or 'let me read the file'" works. The LLM needs concrete examples of what NOT to do, not abstract directives.
+
+**Hooks as a design pattern.** When you constrain length, responses can feel abrupt. Adding "end with a hook" ("want the implementation details?") turns a dead-end into a conversation. This is the mechanism that makes progressive disclosure work — short answers that invite depth.
+
+## Applied: voice output optimization
+
+We applied this method to optimize a system prompt for a voice agent where Claude's text output is read aloud through TTS.
+
+**Evidence:** Loaded a real 3-turn conversation. Responses were 1,900-3,500 chars — full specs and implementation plans read aloud as monologues.
+
+**Diagnosis:** The prompt constrained formatting (no markdown) but not volume. The model produced natural-sounding walls of text.
+
+**Round 1 hypothesis:** Add three rules — hard sentence cap ("2-3 by default"), progressive disclosure ("let the user pick what to expand"), and voice medium awareness ("every extra sentence costs 5-10 seconds").
+
+**Round 1 results:**
+
+| Turn | Baseline | Round 1 | Reduction |
+|------|----------|---------|-----------|
+| Simple question | ~200 chars | 129 | 35% |
+| List items | ~1,968 | 366 | 81% |
+| Elaborate | ~3,548 | 435 | 88% |
+
+Good length reduction. But: filler phrases still present ("let me read the file for you"), missing follow-up hooks, one turn under-delivered on information.
+
+**Round 2 hypothesis:** Add "skip filler phrases" with anti-examples, add "end with a hook" rule.
+
+**Round 2 results:**
+
+| Turn | Round 1 | Round 2 | Change |
+|------|---------|---------|--------|
+| Simple question | 129 | 64 | -50% (filler eliminated) |
+| List items | 366 | 229 | -37% (tighter, all items included) |
+| Elaborate | 435 | 477 | +10% (but better content — includes hook) |
+
+Round 2 was better on every dimension except raw length on turn 3, which gained a follow-up hook ("want to tackle it?") that made the interaction feel complete. Shipped it.
+
+**Key finding:** The leverage was overwhelmingly in information dosing (60-90% reduction), not formatting (10-15% reduction from removing markdown syntax). This would have been invisible without controlled comparison.
