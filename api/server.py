@@ -63,10 +63,7 @@ def list_sessions() -> list[SessionInfo]:
     sessions: list[SessionInfo] = []
     for f in files:
         sid = Path(f).stem
-        try:
-            conv = Conversation.from_jsonl(f)
-        except Exception:
-            continue
+        conv = Conversation.from_jsonl(f)
         name = conv.last_user_message or conv.title
         if not name:
             continue
