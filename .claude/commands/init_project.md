@@ -33,6 +33,7 @@ Your code must be clean, minimalist and easy to read.
 | File | Purpose |
 |------|---------|
 | docs/gemini-live-docs.md | Gemini Live API reference — capabilities, VAD config, function calling, session management |
+| @vibecoded_apps/claude_talks/src/lib/tts.ts | Test-only TTS utility — `speak(apiKey, text)` → base64 PCM at 24kHz via Gemini TTS. Dynamically imported by Chrome MCP test scripts (`import('/src/lib/tts.ts')`), never imported by production code |
 
 ## Guiding Principles
 
@@ -171,6 +172,17 @@ Or use **Chrome MCP** `evaluate_script` with `fetch()` — browser stdout works 
 > Navigate to `http://localhost:5000/#/live`. Take a snapshot. Click the button labeled `converse_closure_question` (a saved recording). Wait 15 seconds for the replay to complete. Take a snapshot. Verify that message bubbles appeared in the conversation area. Check console for errors — ignore "mic" warnings. Report pass/fail.
 
 - Saved recordings: `vibecoded_apps/claude_talks/public/recordings/` — `.json` files that can be replayed in the UI to test the full E2E pipeline without a mic
+
+**Programmatic audio injection** (Chrome MCP, no mic needed):
+> Uses `getUserMedia` override + TTS to inject synthetic speech. No production code changes.
+> 1. `navigate_page` to `http://localhost:5000/#/live` with `initScript` that overrides `getUserMedia` and exposes `window.__injectAudio(base64pcm, sampleRate)`. See plan `eventual-roaming-scroll.md` for the full initScript.
+> 2. Click Start (VAD mode). Wait for `[live] connected` in console.
+> 3. `evaluate_script`: `const { speak } = await import('/src/lib/tts.ts');` → `speak(key, 'Say naturally: <prompt> OVER')` → `window.__injectAudio(data, sampleRate)`.
+> 4. Verify: console shows `[test] injected N samples` → `[user STT] <transcription>` → `tool call: converse`.
+>
+> **Critical**: initScript MUST be set on `navigate_page` BEFORE clicking Start — the override must be in place when `getUserMedia` is first called. Navigating then injecting the script after load is too late.
+> **VAD only**: injection relies on VAD to detect end-of-speech from silence. PTT mode won't work (no button press/release signals).
+> **Dynamic import**: `import('/src/lib/tts.ts')` works because Vite dev server serves `.ts` source files at their path. If it breaks, inline the TTS API call directly in `evaluate_script`.
 ## Instructions
 
 Read, digest then ask me questions if needed.
