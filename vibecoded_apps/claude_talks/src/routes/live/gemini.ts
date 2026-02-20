@@ -107,6 +107,8 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
   // Converse phase: idle → suppressing (tool call) → relaying (1st Claude chunk) → idle (done)
   let conversePhase: 'idle' | 'suppressing' | 'relaying' = 'idle';
   let userSpokeInTurn = false;
+  const t0 = Date.now();
+  const ts = () => `+${((Date.now() - t0) / 1000).toFixed(1)}s`;
 
   async function handleMessage(message: LiveServerMessage) {
     // --- Tool calls ---
@@ -118,7 +120,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
 
       data.commitTurn();
       for (const fc of message.toolCall.functionCalls) {
-        console.log(`[${tag}] tool call:`, fc.name, fc.args);
+        console.log(`[${tag} ${ts()}] tool call:`, fc.name, fc.args);
 
         if (fc.name === 'accept_instruction') {
           data.approve();
@@ -193,7 +195,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
             executeConverse(instruction);
           } else if (mode === 'correct') {
             // LLM auto-corrects, then hold for approval
-            console.log(`[${tag}] correct mode: running LLM correction`);
+            console.log(`[${tag} ${ts()}] correct mode: running LLM correction`);
             deps.correctInstruction(instruction).then(
               (corrected) => {
                 data.holdForApproval(
@@ -213,7 +215,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
             );
           } else {
             // review mode
-            console.log(`[${tag}] review mode: holding converse for approval`);
+            console.log(`[${tag} ${ts()}] review mode: holding converse for approval`);
             data.holdForApproval(
               { instruction, audioChunks },
               executeConverse,
@@ -239,7 +241,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
     if (!sc) return;
 
     if (sc.interrupted) {
-      console.log(`[${tag}] interrupted`);
+      console.log(`[${tag} ${ts()}] interrupted`);
       userSpokeInTurn = false;
       player.flush();
       data.commitTurn();
@@ -248,7 +250,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
 
     // User speech — always pass through, even during converse.
     if (sc.inputTranscription?.text) {
-      console.log(`[user STT] ${sc.inputTranscription.text}`);
+      console.log(`[user STT ${ts()}] ${sc.inputTranscription.text}`);
       data.appendInput(sc.inputTranscription.text);
       userSpokeInTurn = true;
     }
@@ -258,7 +260,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
     // "Asking Claude" arrives BEFORE the toolCall message, so it naturally
     // passes through while conversePhase is still 'idle'.
     if (sc.outputTranscription?.text && conversePhase === 'idle') {
-      console.log(`[gemini] ${sc.outputTranscription.text}`);
+      console.log(`[gemini ${ts()}] ${sc.outputTranscription.text}`);
       data.appendOutput(sc.outputTranscription.text);
     }
 
@@ -278,7 +280,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
 
       // Nudge: Gemini completed without calling converse after user spoke
       if (userSpokeInTurn && conversePhase === 'idle') {
-        console.log(`[${tag}] no tool call after user speech, nudging`);
+        console.log(`[${tag} ${ts()}] no tool call after user speech, nudging`);
         sessionRef?.sendClientContent({
           turns: [{ role: 'user', parts: [{ text: 'You did not call the converse tool. Please call it now.' }] }],
           turnComplete: true,
@@ -305,7 +307,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
       },
       callbacks: {
         onopen: () => {
-          console.log(`[${tag}] connected`);
+          console.log(`[${tag} ${ts()}] connected`);
           data.setStatus('connected');
         },
         onmessage: (msg: LiveServerMessage) => handleMessage(msg),
@@ -314,7 +316,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
           data.pushError(`Error: ${e.message}`);
         },
         onclose: (e: CloseEvent) => {
-          console.log(`[${tag}] closed:`, e.reason);
+          console.log(`[${tag} ${ts()}] closed:`, e.reason);
           data.setStatus('idle');
         },
       },
