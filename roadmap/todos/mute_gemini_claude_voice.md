@@ -5,66 +5,81 @@ Created: 2026-02-20
 
 ## The problem
 
-Two agents (Gemini Live + Claude Code) share one voice. The user can't
-tell who's speaking. Gemini editorializes, answers instead of routing,
-and leaks audio despite a complex 3-phase suppression state machine.
+Two agents (Gemini Live + Claude Code) share one voice channel. The user
+can't tell who's speaking.
 
 ### Observed failures
 
-| # | Failure | Evidence |
-|---|---------|----------|
-| 1 | **Unreliable routing** — Gemini answers instead of calling `converse` | Nudge logic exists (`gemini.ts:286-291`) because this fails regularly |
-| 2 | **Poor STT** — "commit" → "complete" | Entire correction subsystem built (3 modes, LLM auto-correct, persistent corrections store) |
-| 3 | **Editorializes Claude's text** — paraphrases, skips technical details | System prompt says "relay faithfully" but Gemini summarizes and loses precision |
-| 4 | **Won't stay silent** — generates audio/text during converse | `conversePhase` state machine (3 states, complex timing) exists solely for this |
-| 5 | **Garbles tool-call args** — `instruction` is Gemini's interpretation, not transcription | Another lossy layer in the telephone chain |
-| 6 | **Fragile timing** — "Asking Claude" audio arrives before `toolCall` message | Phase transitions depend on event ordering; race conditions where audio leaks |
+| # | Failure | Why it happens |
+|---|---------|----------------|
+| 1 | **Unreliable routing** — Gemini answers instead of calling `converse` | Gemini is an agent with opinions. The prompt says "always call converse" but prompts are suggestions. A nudge mechanism had to be built. |
+| 2 | **Poor STT** — "commit" → "complete" | `inputTranscription` comes from a separate ASR frontend that doesn't read the model's context. An entire correction subsystem was built (3 modes, LLM auto-correct, persistent corrections). |
+| 3 | **Editorializes Claude's text** — paraphrases, drops technical details | Gemini is asked to "relay faithfully" but it's a language model — it summarizes, softens, skips formatting. Prompt compliance is best-effort. |
+| 4 | **Won't stay silent** — generates audio/text during converse | A 3-state suppression state machine (`idle`/`suppressing`/`relaying`) exists solely to fight this. |
+| 5 | **Garbles tool-call args** — `instruction` ≠ what user said | Gemini interprets, not transcribes. Another lossy link in the telephone chain. |
+| 6 | **Fragile timing** — audio leaks through suppression | "Asking Claude" audio arrives BEFORE the `toolCall` message. Phase transitions depend on event ordering. Race conditions. |
 
 ### Root cause
 
-All six failures stem from one design flaw: **Gemini has agency AND a
-mouth.** The system tries to control Gemini's speech via prompting, but
-prompts are suggestions, not constraints. The `conversePhase` state
-machine is complexity born from fighting Gemini's desire to talk.
+All six failures share one origin: **Gemini has agency AND a mouth.**
 
-## The insight
+The system tries to control speech via prompting, but prompts are
+suggestions, not constraints. The 3-state machine is complexity born
+from fighting Gemini's desire to talk. Every patch (suppression,
+flushing, nudging, phase gating) treats symptoms, not the cause.
 
-Don't remove Gemini. **Muzzle it programmatically.**
+## Design space explored
 
-Gemini keeps its brain (STT, VAD, tool calling) but loses its mouth.
-Audio bytes are dropped in code, not suppressed by prompt. The only time
-Gemini's audio reaches the speaker is when it's reading Claude's text
-aloud — and we control exactly when that happens.
+We considered three architectures:
 
-## Architecture: before and after
+### A. Full split — remove Gemini's audio output entirely
 
-### Before (current)
+Gemini = STT + routing only. Separate TTS service for Claude.
+
+**Problem:** Gemini Live tightly couples four properties: continuous
+listening (VAD), intent routing (tool calls), TTS, and interruptibility.
+All four share one WebSocket. Splitting TTS out means rebuilding
+interruption handling (detect user speech → kill separate TTS → signal
+new input). High cost, modest gain.
+
+### B. Two distinct voices
+
+Keep Gemini's full audio loop. Give Claude a separate TTS with a
+different voice. User hears two distinct voices.
+
+**Problem:** Two TTS pipelines running in parallel. Gemini still speaks
+its own acks and commentary — the prompt-compliance problems (failures
+1, 3, 4) remain. Voice distinction helps attribution but doesn't fix
+the underlying agency conflict.
+
+### C. Muzzle programmatically (chosen)
+
+Keep Gemini Live intact. **Drop audio bytes in code**, not via prompt.
+Only let audio through when Gemini is reading Claude's text.
+
+**Why this wins:**
+- Keeps Gemini Live's tight coupling (VAD + routing + TTS + interrupts
+  on one WebSocket) — no need to rebuild interruption handling
+- Solves voice clarity with two lines of logic (audio gate + phase var)
+- Belt-and-suspenders: prompt tells Gemini "don't speak" AND code drops
+  the bytes. Prompt failure is harmless.
+- Simplifies the state machine from 3 states to 2
+
+## The core insight
+
+**Invert the default.** The current system lets Gemini audio through
+by default and tries to suppress it during converse. The new system
+blocks Gemini audio by default and only opens the gate when Claude's
+text is being read aloud.
 
 ```
-User speaks → Gemini Live (STT + routing + TTS) → Claude Code
-                  ↑                                    │
-                  └──── [CLAUDE]: text fed back ────────┘
-
-Gemini speaks:
-  - Its own acks ("Asking Claude...")
-  - Its own commentary (editorializing)
-  - Claude's text (via sendClientContent relay)
-  - All gated by 3-phase conversePhase state machine
+Current default:  audio PASSES  → suppress during converse (hard)
+New default:      audio BLOCKED → allow during TTS only (easy)
 ```
 
-### After (proposed)
-
-```
-User speaks → Gemini Live (STT + routing) → Claude Code
-                                                  │
-              Gemini TTS ◄── [CLAUDE]: text ──────┘
-              (audio gate: open ONLY during TTS phase)
-
-Gemini speaks:
-  - Claude's text ONLY
-  - Gated by binary state machine (2 states)
-  - Everything else: /dev/null
-```
+This is the difference between a whitelist and a blacklist. Whitelisting
+(only allow what you explicitly want) is fundamentally more secure than
+blacklisting (block what you don't want and hope you caught everything).
 
 ## The state machine
 
@@ -87,345 +102,180 @@ Two states. Two transitions.
                         └──────────────┘
 ```
 
-### State behavior
+### Signal routing by state
 
 | Signal | MUTED (default) | TTS |
 |--------|-----------------|-----|
-| `modelTurn.parts` (Gemini audio) | **DROP** — never reaches speaker | **PLAY** — Gemini reading Claude's text aloud |
-| `outputTranscription` (Gemini's speech text) | **DROP** — never reaches UI | **DROP** — it's `[CLAUDE]:` echo noise; real text is in `appendTool` |
-| `inputTranscription` (user's speech) | Pass through (always) | Pass through (always) |
-| Tool calls | Process normally | N/A (tool calls arrive in MUTED) |
-| `sc.interrupted` (user spoke during TTS) | N/A | → MUTED + `player.flush()` |
-
-### What replaces "Asking Claude"
-
-A programmatic chime sound (Web Audio API, no external file). Plays when
-the `converse` tool call is received. Gives the user instant feedback
-that the system heard them, without Gemini speaking.
+| Gemini audio (`modelTurn.parts`) | **DROP** | **PLAY** (reading Claude's text) |
+| Gemini speech text (`outputTranscription`) | **DROP** | **DROP** (echo noise — real text is in tool result) |
+| User speech (`inputTranscription`) | Pass through | Pass through |
+| Tool calls | Process normally | N/A (arrive in MUTED) |
+| User interrupts (`sc.interrupted`) | N/A | → MUTED + flush player |
 
 ### Comparison to current state machine
 
-| | Current (`conversePhase`) | Proposed (`phase`) |
+| | Current (3-state) | Proposed (2-state) |
 |---|---|---|
-| States | 3: `idle`, `suppressing`, `relaying` | 2: `muted`, `tts` |
-| Default | `idle` (audio/text pass through) | `muted` (audio/text dropped) |
-| Timing dependency | "Asking Claude" must arrive before `toolCall` | None — chime on tool call, no ack |
-| `outputTranscription` | Shown in `idle`, blocked in `suppressing`/`relaying` | **Never shown** — Claude's text is always in `appendTool` |
-| Audio flush | On entering `suppressing` (cancel queued ack) | On `sc.interrupted` only (nothing to flush otherwise) |
+| Default | `idle` — audio/text pass through | `muted` — audio/text dropped |
+| Core logic | Blacklist: suppress during converse | Whitelist: allow only during TTS |
+| Timing dependency | "Asking Claude" must arrive before `toolCall` | None — chime on tool call |
+| `outputTranscription` | Shown in `idle` (Gemini's own speech) | Never shown (Claude's text is always in tool result) |
+| States | idle, suppressing, relaying | muted, tts |
 
-## Key files
+### What replaces verbal acknowledgment
 
-| File | Lines | What it does now | What changes |
-|------|-------|-----------------|--------------|
-| `.../live/gemini.ts` | 108 | `conversePhase: 'idle' \| 'suppressing' \| 'relaying'` | Replace with `phase: 'muted' \| 'tts'` |
-| `.../live/gemini.ts` | 66-80 | `BASE_PROMPT` — relay instructions | Simplify to dispatcher prompt |
-| `.../live/gemini.ts` | 135-229 | `converse` tool handler — suppression + relay | Remove suppression setup, add chime |
-| `.../live/gemini.ts` | 247-253 | `sc.interrupted` handler | Add `phase = 'muted'` |
-| `.../live/gemini.ts` | 265-267 | `outputTranscription` → `appendOutput` | Delete (never display Gemini's speech text) |
-| `.../live/gemini.ts` | 273-278 | Audio gating: `conversePhase !== 'suppressing'` | Change to: `phase === 'tts'` |
-| `.../live/gemini.ts` | 285-291 | Nudge: `conversePhase === 'idle'` | Change to: `phase === 'muted'` |
-| `.../live/audio.ts` | (end) | — | Add `playChime()` utility |
-| `.../live/+page.svelte` | 188 | Label: `'Gemini'` | Change to `'Claude'` |
+A programmatic chime sound when the `converse` tool call is received.
+Instant, deterministic, no Gemini generation latency. The user hears
+a click and knows the system is working.
 
-### Files NOT changed
+### The prompt change (belt + suspenders)
 
-| File | Why unchanged |
-|------|--------------|
-| `data.svelte.ts` | `appendOutput` stays (dead code, not called). `pendingOutput` always empty. No breakage. |
-| `types.ts` | No interface changes. `DataStoreMethods.appendOutput` stays in the interface (removing would be a separate cleanup). |
-| `tools.ts` | Tool declarations unchanged. |
-| `converse.ts` | SSE consumer unchanged. |
-| `stores/ui.svelte.ts` | No changes. |
-| `stores/corrections.svelte.ts` | No changes. |
-| `correct.ts` | No changes. |
+The system prompt changes from "relay" instructions to "dispatcher":
 
-## Implementation
+```
+Current: "You are a voice relay... ALWAYS call converse...
+          respond with 'Asking Claude'... read [CLAUDE] aloud..."
 
-### 1. `gemini.ts` — state variable
-
-Replace line 108:
-
-```typescript
-// OLD
-let conversePhase: 'idle' | 'suppressing' | 'relaying' = 'idle';
-
-// NEW
-let phase: 'muted' | 'tts' = 'muted';
+New:     "You are a silent dispatcher... call converse...
+          Do NOT speak or acknowledge...
+          read [CLAUDE] aloud..."
 ```
 
-### 2. `gemini.ts` — system prompt
+Two independent effects:
+1. **Behavioral**: Gemini skips generating ack audio → faster tool call
+2. **Safety net**: even if Gemini speaks anyway, MUTED drops the bytes
 
-Replace `BASE_PROMPT` (lines 66-80):
+Neither the prompt nor the code gate is sufficient alone. Together they're
+robust: prompt failures are harmless (code catches them), code bugs are
+visible (prompt keeps Gemini mostly quiet for debugging).
 
-```typescript
-const BASE_PROMPT = `
-You are a silent dispatcher between a user and Claude Code.
+## Architecture diagrams
 
-RULES:
-1. When the user gives an instruction, call the converse tool with their words. Do NOT speak or acknowledge.
-2. When you receive a message prefixed with [CLAUDE]:, read it aloud naturally and conversationally. Skip bullet markers, dashes, code formatting symbols, and random IDs.
-3. Never add your own words, commentary, or opinions. Never answer questions yourself.
-4. When user says "STOP", stop immediately.
-`;
+### Before
+
+```
+User speaks → Gemini Live (STT + routing + TTS) → Claude Code
+                  ↑                                    │
+                  └──── [CLAUDE]: text fed back ────────┘
+
+Gemini speaks:
+  - Its own acks ("Asking Claude...")
+  - Its own commentary (editorializing)
+  - Claude's text (via sendClientContent relay)
+  - All gated by 3-phase state machine (leaky)
 ```
 
-Key difference: "Do NOT speak or acknowledge" replaces "say Asking
-Claude." Gemini skips generating ack audio → faster path to tool call.
-Even if it generates something, MUTED drops the bytes.
+### After
 
-### 3. `gemini.ts` — converse tool handler
+```
+User speaks → Gemini Live (STT + routing) → Claude Code
+                                                  │
+              Gemini TTS ◄── [CLAUDE]: text ──────┘
+              (audio gate: open ONLY in TTS phase)
 
-In the `converse` tool block (starting ~line 135):
-
-```typescript
-// REMOVE these lines:
-conversePhase = 'suppressing';
-player.flush();
-
-// ADD: play chime for user feedback
-playChime();
+Gemini speaks:
+  - Claude's text ONLY
+  - Gated by 2-state machine (whitelist)
+  - Everything else: /dev/null
 ```
 
-In `executeConverse` callbacks:
+### Data flow during a converse call
 
-```typescript
-onChunk(text) {
-  data.appendTool(text);
-  if (sessionRef) {
-    // First chunk: open the audio gate
-    if (phase === 'muted') phase = 'tts';
-    sessionRef.sendClientContent({
-      turns: [{ role: 'user', parts: [{ text: `[CLAUDE]: ${text}` }] }],
-      turnComplete: true,
-    });
-  }
-},
-onDone() {
-  phase = 'muted';
-  data.finishTool();
-},
-onError(msg) {
-  phase = 'muted';
-  data.finishTool();
-  data.pushError(msg);
-},
 ```
+1. User speaks
+   └→ inputTranscription → UI (always)
 
-### 4. `gemini.ts` — audio gating in serverContent
+2. Gemini calls converse tool
+   └→ chime plays (programmatic)
+   └→ audio gate: stays MUTED
 
-Replace the audio playback condition (~line 274):
+3. Claude Code streams response (SSE chunks)
+   └→ each chunk: appendTool (UI shows text)
+   └→ first chunk: phase → TTS (audio gate opens)
+   └→ each chunk: sendClientContent → Gemini reads aloud
+   └→ Gemini audio → speaker (gate is open)
 
-```typescript
-// OLD
-if (part.inlineData?.data && conversePhase !== 'suppressing') {
-  player.play(part.inlineData.data);
-}
+4. Claude stream done
+   └→ phase → MUTED (audio gate closes)
 
-// NEW
-if (part.inlineData?.data && phase === 'tts') {
-  player.play(part.inlineData.data);
-}
-```
-
-### 5. `gemini.ts` — outputTranscription
-
-Delete the block at ~line 265-267:
-
-```typescript
-// DELETE entirely — Gemini's speech text never reaches the UI
-// Claude's text is already displayed via appendTool
-if (sc.outputTranscription?.text && conversePhase === 'idle') {
-  data.appendOutput(sc.outputTranscription.text);
-}
-```
-
-### 6. `gemini.ts` — interrupted handler
-
-Add phase reset (~line 247):
-
-```typescript
-if (sc.interrupted) {
-  console.log(`[${tag}] interrupted`);
-  phase = 'muted';          // ← ADD
-  userSpokeInTurn = false;
-  player.flush();
-  data.commitTurn();
-  return;
-}
-```
-
-### 7. `gemini.ts` — nudge logic
-
-Update condition (~line 285):
-
-```typescript
-// OLD
-if (userSpokeInTurn && conversePhase === 'idle') {
-
-// NEW
-if (userSpokeInTurn && phase === 'muted') {
-```
-
-### 8. `gemini.ts` — approval cancel callbacks
-
-The cancel callbacks passed to `holdForApproval` (~lines 208, 216, 225):
-
-```typescript
-// OLD
-() => { conversePhase = 'idle'; }
-
-// NEW
-() => { phase = 'muted'; }
-```
-
-Technically a no-op (already muted by default), but explicit is better
-for the reject path where we need to be sure the gate is closed.
-
-### 9. `audio.ts` — chime utility
-
-Add after `playPcmChunks` (after line 160):
-
-```typescript
-/** Short notification chime — no external file needed. */
-export function playChime(frequency = 800, duration = 0.15): void {
-  const ctx = new AudioContext();
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.connect(gain);
-  gain.connect(ctx.destination);
-  osc.frequency.value = frequency;
-  gain.gain.value = 0.3;
-  osc.start();
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
-  osc.stop(ctx.currentTime + duration);
-  setTimeout(() => void ctx.close(), (duration + 0.1) * 1000);
-}
-```
-
-Import in `gemini.ts`:
-
-```typescript
-import { playChime } from './audio';
-```
-
-### 10. `+page.svelte` — label
-
-Change assistant turn label (line 188):
-
-```svelte
-<!-- OLD -->
-<span class="label">{turn.role === 'user' ? 'You' : 'Gemini'}</span>
-
-<!-- NEW -->
-<span class="label">{turn.role === 'user' ? 'You' : 'Claude'}</span>
+5. User can interrupt at any point during step 3
+   └→ sc.interrupted → phase → MUTED + flush
 ```
 
 ## Interaction with existing features
 
-### Review/correct modes (approval flow)
+**Review/correct modes**: Unchanged. During approval wait, system is
+in MUTED (default). When user approves and Claude starts streaming,
+TTS opens on first chunk. Cancel resets to MUTED (no-op since it's
+already the default).
 
-Unchanged. In review/correct mode:
-1. Tool call arrives → MUTED (default, no change)
-2. `holdForApproval` fires (sync in review, async in correct)
-3. User sees approval UI, clicks Accept
-4. `executeConverse` runs → Claude streams → first chunk → `phase = 'tts'`
-5. Gemini reads Claude's text aloud
-6. Done → `phase = 'muted'`
+**PTT (push-to-talk)**: Orthogonal. PTT gates mic input
+(`sendRealtimeInput`). The binary phase gate controls audio output.
+Independent axes.
 
-The approval cancel callback resets to `muted` (already the default).
-No dead audio during the approval wait.
+**Replay mode**: Same flow. Recorded audio triggers tool calls the
+same way live audio does.
 
-### PTT (push-to-talk)
-
-Unchanged. PTT gates mic input (`sendRealtimeInput`), not audio output.
-The binary `phase` gate is orthogonal.
-
-### Replay mode
-
-Unchanged. Replay feeds pre-recorded audio via `sendRealtimeInput`.
-The same tool call → chime → Claude stream → TTS flow applies.
-
-### `accept_instruction` tool
-
-Unchanged. It calls `data.approve()` and sends a blocking tool response.
-No audio generation, no phase interaction.
-
-### `pendingOutput` / `doCommitAssistant()`
-
-`appendOutput` is never called → `pendingOutput` always empty →
-`doCommitAssistant()` still works (commits based on `pendingTool` state,
-which is unaffected). Assistant turns in the UI contain only Claude's
-tool results, which is correct.
+**`accept_instruction` tool**: Unchanged. Calls `data.approve()`,
+sends blocking tool response. No audio generation, no phase interaction.
 
 ## What this does NOT fix
 
-- **STT accuracy** — `inputTranscription` still comes from Gemini's
-  separate ASR frontend. Same errors. The correction subsystem
-  (correct mode, LLM auto-correct) is still needed.
-  See: `roadmap/todos/correction_llm_accuracy.md`
+These remain separate problems with their own solutions:
+
+- **STT accuracy** — `inputTranscription` still from Gemini's ASR.
+  Same errors. Correction subsystem still needed.
+  → `roadmap/todos/correction_llm_accuracy.md`
 
 - **Routing reliability** — Gemini may still fail to call `converse`.
-  The nudge logic stays. However: with a simpler prompt (no speech
-  management), routing may improve (untested hypothesis).
+  Nudge logic stays. Hypothesis: simpler prompt (no speech management)
+  may improve routing, but untested.
 
 - **Tool-call arg quality** — `instruction` is still Gemini's
-  interpretation. The correction pipeline still needed for accuracy.
+  interpretation, not verbatim transcription.
+
+## Implementation sketch
+
+The change is concentrated in the Gemini message handler (`gemini.ts`):
+
+1. **State variable**: 3-state `conversePhase` → 2-state `phase` (`'muted' | 'tts'`)
+2. **Audio gate**: flip condition from blacklist (`!== 'suppressing'`) to whitelist (`=== 'tts'`)
+3. **outputTranscription**: delete the handler entirely (never display Gemini's speech text)
+4. **Converse tool handler**: remove suppression setup, add chime call
+5. **Interrupted handler**: add `phase = 'muted'`
+6. **System prompt**: relay → dispatcher
+7. **Chime utility**: small Web Audio API function in `audio.ts`
+8. **UI label**: "Gemini" → "Claude"
+
+Dead code (`appendOutput`, `pendingOutput` in the data store) becomes
+inert — never called, no breakage. Can be cleaned up separately.
+
+### Scope
+
+| Layer | Changes |
+|-------|---------|
+| Gemini message handler | State machine, audio gate, prompt |
+| Audio utilities | Add chime function |
+| UI | One label change |
+| Data store | None |
+| Types/interfaces | None |
+| Backend/API | None |
+| Tool declarations | None |
 
 ## Verification
 
-### Build
+**Build**: `npm run check` in the Svelte app.
 
-```bash
-cd vibecoded_apps/claude_talks && npm run check
-```
+**Manual test**: Start live session → speak → verify:
+- No "Asking Claude" voice (silence after speaking)
+- Chime plays when tool call fires
+- Claude's text appears in UI (streamed)
+- Claude's text spoken aloud after first chunk arrives
+- Interrupting stops playback immediately
+- Label says "Claude" not "Gemini"
 
-### Manual test (with API key)
+**Replay test**: Use saved recording — same verification, no mic needed.
 
-1. Navigate to `http://localhost:5173/#/live`
-2. Enter Gemini API key
-3. Click Start → speak an instruction ("What is a closure?")
-4. Verify:
-   - **No "Asking Claude"** voice — silence after speaking
-   - **Chime plays** when tool call fires
-   - **Claude's text appears** in the tool card (streamed)
-   - **Claude's text spoken aloud** by Gemini TTS after first chunk
-   - **Interrupting** (speak during TTS) stops playback immediately
-   - **Label says "Claude"** not "Gemini"
-
-### Replay test (no mic needed)
-
-Use saved recording:
-
-1. Click a recording button (e.g., `converse_closure_question`)
-2. Wait ~10s for Gemini to process
-3. Same verification as above
-
-### Console log patterns
-
-```
-[live] tool call: converse { instruction: "..." }     ← tool fires
-[converse] starting: ...                               ← Claude stream starts
-[converse] chunk 1: ...                                ← first chunk → TTS opens
-```
-
-No `"Asking Claude"` in outputTranscription logs.
-
-### E2E with chrome agent
-
-```
-Navigate to http://localhost:5173/#/live.
-Take a snapshot. Verify buttons: Start, Record, Replay.
-Click the button labeled "converse_closure_question".
-Wait 20 seconds.
-Take a snapshot.
-Verify: message bubbles appeared, label says "Claude" not "Gemini".
-Check console: no errors (ignore mic warnings).
-Report pass/fail.
-```
-
-## Rollback
-
-If this breaks something unexpected: revert `phase` to the old 3-state
-`conversePhase`, restore `BASE_PROMPT`, remove `playChime` call,
-restore the `outputTranscription` block. All changes are in `gemini.ts`
-+ `audio.ts` + one label in `+page.svelte`. No data model or API changes.
+**Rollback**: All changes in 3 files (`gemini.ts`, `audio.ts`,
+`+page.svelte`). No data model, API, or interface changes. Revert
+is straightforward.
