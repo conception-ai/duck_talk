@@ -2,10 +2,8 @@
 
 import logging
 import os
-import tempfile
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import cast
 
 from claude_agent_sdk import (
@@ -21,13 +19,10 @@ log = logging.getLogger("claude")
 # Pop it from the process so the child won't see it.
 _ = os.environ.pop("CLAUDECODE", None)
 
-# Fully isolated Claude Code installation for the SDK subprocess.
-# Setup once:
+# To run fully isolated (separate config/creds/sessions):
 #   npm install @anthropic-ai/claude-code --prefix ~/.claude-sdk/cli
 #   CLAUDECODE= CLAUDE_CONFIG_DIR=~/.claude-sdk ~/.claude-sdk/cli/node_modules/.bin/claude login
-_SDK_HOME = Path.home() / ".claude-sdk"
-_SDK_CLI_PATH = _SDK_HOME / "cli/node_modules/.bin/claude"
-_SDK_CONFIG_DIR = str(_SDK_HOME)
+# Then pass cli_path and env={"CLAUDE_CONFIG_DIR": ...} to ClaudeAgentOptions.
 
 
 @dataclass
@@ -71,12 +66,10 @@ class Claude:
     ):
         self._options = ClaudeAgentOptions(
             model=model,
-            cwd=cwd or tempfile.mkdtemp(prefix="claude_api_"),
+            cwd=cwd or os.getcwd(),
             system_prompt=system_prompt or "",
             include_partial_messages=True,
             permission_mode="acceptEdits",
-            cli_path=_SDK_CLI_PATH,
-            env={"CLAUDE_CONFIG_DIR": _SDK_CONFIG_DIR},
             stderr=lambda line: log.debug("sdk: %s", line.rstrip()),
         )
 
