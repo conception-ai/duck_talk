@@ -107,6 +107,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
 
   // Mutable ref — handleMessage closes over this, assigned after connect().
   let sessionRef: Session | null = null;
+  let closed = false; // hoisted so onclose callback can reach it
   // Converse phase: idle → suppressing (tool call) → relaying (1st Claude chunk) → idle (done)
   let conversePhase: 'idle' | 'suppressing' | 'relaying' = 'idle';
   let userSpokeInTurn = false;
@@ -355,8 +356,15 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
           data.pushError(`Error: ${e.message}`);
         },
         onclose: (e: CloseEvent) => {
+          const wasExpected = closed; // user-initiated stop() already set this
+          closed = true;
+          sessionRef = null;
+          conversePhase = 'idle';
           console.log(`${ts()} closed: ${e.reason}`);
           data.setStatus('idle');
+          if (!wasExpected && e.reason) {
+            data.pushError(`Gemini disconnected: ${e.reason}`);
+          }
         },
       },
     });
@@ -367,8 +375,6 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
       'background:#6b7280;color:white;font-weight:bold;padding:1px 6px;border-radius:3px',
       'color:#9ca3af;white-space:pre-wrap',
     );
-
-    let closed = false;
 
     return {
       sendRealtimeInput: (input) => { if (!closed) session.sendRealtimeInput(input); },
