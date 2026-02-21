@@ -111,6 +111,7 @@ export function createDataStore(deps: DataStoreDeps) {
       } else {
         voiceLog.push({ role: 'user', text: userText, ts: Date.now() });
       }
+      window.dispatchEvent(new CustomEvent('utterance-committed', { detail: { transcript: userText } }));
     }
     pendingInput = '';
     audioBuffer = [];

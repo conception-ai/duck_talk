@@ -10,7 +10,10 @@
   import { correctInstruction } from './correct';
   import { DEFAULT_SYSTEM_PROMPT } from './defaults';
   import { createLLM } from '../../lib/llm';
+  import { setup as setupRecorder } from '../../lib/recorder';
   import type { AudioSink, ContentBlock, InteractionMode, Message, STTCorrection } from './types';
+
+  setupRecorder();
 
   let { params } = $props<{ params?: { id?: string } }>();
 

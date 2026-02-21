@@ -2,6 +2,7 @@
   import Router from 'svelte-spa-router';
   import HomePage from './routes/home/+page.svelte';
   import LivePage from './routes/live/+page.svelte';
+  import RecordingsPage from './routes/recordings/+page.svelte';
 </script>
 
 <Router
@@ -9,5 +10,6 @@
     '/': HomePage,
     '/live': LivePage,
     '/live/:id': LivePage,
+    '/recordings': RecordingsPage,
   }}
 />
