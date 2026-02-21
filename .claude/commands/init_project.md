@@ -7,10 +7,10 @@ Your code must be clean, minimalist and easy to read.
 
 | File | Purpose |
 |------|---------|
-| @models.py | Session JSONL schema |
+| @models.py | Session JSONL schema, `fork_session()` (rewind by creating truncated JSONL), `Conversation` loader |
 | @watcher.py | File monitor |
 | @claude_client.py | Claude Code SDK wrapper (isolated subprocess) |
-| @api/server.py | FastAPI backend — SSE streaming + sentence buffering + `GET /api/sessions/{id}/messages` (faithful content blocks) + `POST /api/sessions/{id}/back` (rewind) |
+| @api/server.py | FastAPI backend — SSE streaming, `GET /api/sessions/{id}/messages` (faithful content blocks), `POST /api/converse` (forks session on `leaf_uuid` for rewind) |
 | @vibecoded_apps/CLAUDE.md | Svelte app conventions |
 | @vibecoded_apps/claude_talks/src/routes/home/+page.svelte | Home page — session list, fetches `GET /api/sessions`, navigates to `/live/:id` |
 | @vibecoded_apps/claude_talks/src/App.svelte | Router — `/` → HomePage, `/live` → LivePage, `/live/:id` → LivePage (with session), `/recordings` → RecordingsPage |
@@ -35,6 +35,7 @@ Your code must be clean, minimalist and easy to read.
 | File | Purpose |
 |------|---------|
 | docs/gemini-live-docs.md | Gemini Live API reference — capabilities, VAD config, function calling, session management |
+| docs/claude_code_python_sdk.md | Claude Agent SDK reference — `ClaudeAgentOptions`, `ClaudeSDKClient`, `query()`. No leaf/branch control exists; `resume` is session ID only |
 | @vibecoded_apps/claude_talks/src/lib/tts.ts | Test-only TTS utility — `speak(apiKey, text)` → base64 PCM at 24kHz via Gemini TTS. Dynamically imported by Claude in Chrome test scripts (`import('/src/lib/tts.ts')`), never imported by production code |
 
 ## Guiding Principles
@@ -52,6 +53,7 @@ Your code must be clean, minimalist and easy to read.
   - **Appended during live session** (from SSE stream): degraded — only `[{ type: 'text', text: flatText }]`. The SSE endpoint returns `{text: "..."}` chunks, not structured blocks.
   - Both render fine. When user navigates away and returns, history reload gives full fidelity.
 - **`walk_path()` returns leaf-to-root order**: `Conversation.walk_path(leaf_uuid)` returns `[leaf, ..., root]`. Must `.reverse()` for display. The backend `GET /messages` endpoint handles this.
+- **CLI ignores `SummaryEntry.leafUuid`** (proven experimentally): When resuming with `--resume <session_id>`, the CLI always picks the deepest leaf in the tree, NOT the `leafUuid` from a `SummaryEntry`. `Conversation.active_leaf` matches this behavior (just deepest leaf). The only way to rewind is `fork_session()`: create a new JSONL with only the path entries up to the target message, then resume THAT session. The frontend auto-adopts the new `session_id` from the done event (`converse.ts:103`).
 - **Backend serialization — no wrapper model**: `AssistantEntry.message.content` is `list[ContentBlock]` (pydantic models). Just call `.model_dump(exclude_none=True)` on each block — naturally produces the right JSON. `UserEntry.message.content` (`str | list[JsonDict]`) returned as-is.
 - **`back()` abort race condition** (`data.svelte.ts`): `api.abort()` is sync but the AbortError fires on the next microtask. The error callback in `gemini.ts` calls `finishTool()` which could commit partial results. Solution: `back()` clears `pendingTool = null` BEFORE the await, so `finishTool()` short-circuits when the async error arrives.
 - **Gemini Live**: use `types.LiveConnectConfig` + `types.Modality.AUDIO` (not raw dicts). `model_turn.parts` can be `None`. File input needs chunking + `audio_stream_end=True`.
