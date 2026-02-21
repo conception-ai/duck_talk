@@ -141,20 +141,29 @@ const { setup } = await import('/src/lib/test-inject.ts');
 })()
 ```
 
-**Programmatic audio injection** — no mic needed, no saved recordings:
-> Uses `test-inject.ts` module + TTS to inject synthetic speech.
+**Programmatic audio injection** — no mic needed:
+> Uses `test-inject.ts` module to inject audio into a fake mic stream.
+> Two injection sources: **replay from IndexedDB** (free, instant, real audio) or **TTS** (costs API credits, synthetic).
+>
 > 1. `tabs_context_mcp` → get existing tabs, then `tabs_create_mcp` if needed to get a `tabId`
 > 2. `navigate` with `tabId` + `url: "http://localhost:5000/#/live"`
-> 3. `javascript_tool`: setup fake mic (BEFORE clicking Start)
+> 3. `javascript_tool`: setup fake mic + list available replays (BEFORE clicking Start)
 >    ```js
 >    (async () => {
->      const { setup } = await import('/src/lib/test-inject.ts');
+>      const { setup, listReplays } = await import('/src/lib/test-inject.ts');
 >      setup();
->      return 'fake mic ready';
+>      return JSON.stringify(await listReplays());
 >    })()
 >    ```
 > 4. Click the mic orb (use `find` to locate it, then `computer` to click). Wait for `[live] connected` via `read_console_messages` with `pattern: "connected"`.
-> 5. `javascript_tool`: generate TTS + inject
+> 5. `javascript_tool`: inject — **Option A: replay from IndexedDB** (preferred)
+>    ```js
+>    (async () => {
+>      const { injectFromDB } = await import('/src/lib/test-inject.ts');
+>      return await injectFromDB(0); // returns transcript
+>    })()
+>    ```
+>    **Option B: TTS** (when no recordings exist or need specific text)
 >    ```js
 >    (async () => {
 >      const { inject } = await import('/src/lib/test-inject.ts');
@@ -165,10 +174,11 @@ const { setup } = await import('/src/lib/test-inject.ts');
 >      return 'injected';
 >    })()
 >    ```
-> 6. Verify via `read_console_messages`: `[test] injected N samples` → `[user STT]` → `tool call: converse` → `[converse] TTFT: Nms`
+> 6. Verify via `read_console_messages`: `[test] injected N samples` → `tool call: converse` → `TTFT: Nms`
 >
 > **Critical**: `setup()` must run BEFORE clicking Start — the getUserMedia override must be in place when the app first calls it.
 > **VAD only**: injection relies on VAD to detect end-of-speech from silence.
+> **Replays**: recordings are saved to IndexedDB automatically during live sessions (via `recorder.ts`). Use `listReplays()` to see what's available.
 ## Instructions
 
 Read, digest then ask me questions if needed.

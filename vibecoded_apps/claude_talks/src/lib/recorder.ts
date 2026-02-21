@@ -52,10 +52,7 @@ registerProcessor('recorder-proc', R);
 const WIN = window as unknown as Record<string, unknown>;
 
 export function setup(): RecorderHandle {
-  if (WIN.__recorder) {
-    console.log('[recorder] already set up');
-    return WIN.__recorder as RecorderHandle;
-  }
+  if (WIN.__recorder) return WIN.__recorder as RecorderHandle;
 
   let buffer: Chunk[] = [];
   const recordings: Recording[] = [];

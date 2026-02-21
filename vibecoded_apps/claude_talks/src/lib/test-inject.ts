@@ -1,21 +1,22 @@
 /**
  * Audio injection for E2E testing (Chrome MCP).
- * Overrides getUserMedia with a fake stream, then injects TTS audio into it.
+ * Overrides getUserMedia with a fake stream, then injects audio into it.
  *
  * Not imported by production code. Dynamically imported via:
- *   const { setup, inject } = await import('/src/lib/test-inject.ts');
+ *   const { setup, inject, listReplays, injectFromDB } = await import('/src/lib/test-inject.ts');
  *
- * Usage from evaluate_script:
+ * Usage:
  *   Step 1 (before clicking Start):
- *     const { setup } = await import('/src/lib/test-inject.ts');
  *     setup();
  *
- *   Step 2 (after connection):
- *     const { inject } = await import('/src/lib/test-inject.ts');
+ *   Step 2 (after connection) — replay from IndexedDB:
+ *     const replays = await listReplays();  // see available recordings
+ *     await injectFromDB(0);                // inject first recording
+ *
+ *   Step 2 (after connection) — TTS alternative:
  *     const { speak } = await import('/src/lib/tts.ts');
  *     const key = JSON.parse(localStorage.getItem('claude-talks:ui') || '{}').apiKey;
- *     const { data, sampleRate } = await speak(key, 'Say naturally: <prompt> OVER');
- *     inject(data, sampleRate);
+ *     inject((await speak(key, 'Say naturally: <prompt> OVER')).data, 24000);
  */
 
 const WIN = window as unknown as Record<string, unknown>;
@@ -66,4 +67,22 @@ export function inject(base64pcm: string, sampleRate: number): void {
   source.connect(dest);
   source.start();
   console.log(`[test] injected ${float32.length} samples at ${sampleRate}Hz (${(float32.length / sampleRate).toFixed(1)}s)`);
+}
+
+/** List available recordings from IndexedDB. */
+export async function listReplays(): Promise<{ index: number; transcript: string; chunks: number }[]> {
+  const { getAllRecordings } = await import('./recording-db');
+  const recordings = await getAllRecordings();
+  return recordings.map((r, i) => ({ index: i, transcript: r.transcript, chunks: r.chunks.length }));
+}
+
+/** Inject a recorded utterance from IndexedDB into the fake mic stream. */
+export async function injectFromDB(index = 0): Promise<string> {
+  const { getAllRecordings } = await import('./recording-db');
+  const { combineChunks } = await import('./stt');
+  const recordings = await getAllRecordings();
+  const rec = recordings[index];
+  if (!rec) throw new Error(`No recording at index ${index}`);
+  inject(combineChunks(rec.chunks), 16000);
+  return rec.transcript;
 }

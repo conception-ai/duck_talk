@@ -5,6 +5,16 @@
  *   const wav = chunksToWav(recording.chunks, recording.sampleRate);
  */
 
+/** Uint8Array → base64 without stack overflow (chunked fromCharCode). */
+function uint8ToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  const SZ = 8192;
+  for (let i = 0; i < bytes.length; i += SZ) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + SZ) as unknown as number[]);
+  }
+  return btoa(bin);
+}
+
 /** Combine sequential base64 PCM chunks into a single base64 PCM string. */
 export function combineChunks(chunks: { data: string }[]): string {
   const parts: Uint8Array[] = [];
@@ -18,7 +28,7 @@ export function combineChunks(chunks: { data: string }[]): string {
   const combined = new Uint8Array(totalLen);
   let offset = 0;
   for (const part of parts) { combined.set(part, offset); offset += part.length; }
-  return btoa(String.fromCharCode(...combined));
+  return uint8ToBase64(combined);
 }
 
 /** Convert base64 PCM chunks to a base64 WAV string. */
@@ -37,5 +47,5 @@ export function chunksToWav(chunks: { data: string }[], sampleRate = 16000): str
   w(36, 'data'); v.setUint32(40, pcm.length, true);
   const wav = new Uint8Array(44 + pcm.length);
   wav.set(new Uint8Array(header)); wav.set(pcm, 44);
-  return btoa(String.fromCharCode(...wav));
+  return uint8ToBase64(wav);
 }
