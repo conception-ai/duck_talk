@@ -6,6 +6,7 @@
   import { createUIStore } from './stores/ui.svelte';
   import { createCorrectionsStore } from './stores/corrections.svelte';
   import { startMic, createPlayer, playPcmChunks } from './audio';
+  import { speak } from '../../lib/tts';
   import { createConverseApi } from './converse';
   import { correctInstruction } from './correct';
   import { DEFAULT_SYSTEM_PROMPT } from './defaults';
@@ -43,6 +44,16 @@
       const key = ui.apiKey;
       if (!key) return Promise.resolve(instruction);
       return correctInstruction(createLLM({ apiKey: key }), instruction, corrections.corrections);
+    },
+    readbackInstruction: (text: string) => {
+      let cancelled = false;
+      let stop: (() => void) | undefined;
+      if (!ui.readbackEnabled || !ui.apiKey) return () => {};
+      speak(ui.apiKey, text).then(({ data, sampleRate }) => {
+        if (cancelled) return;
+        stop = playPcmChunks([data], sampleRate).stop;
+      }).catch((e) => console.error('[readback]', e));
+      return () => { cancelled = true; stop?.(); };
     },
   });
 
@@ -119,6 +130,7 @@
   let settingsOpen = $state(!ui.apiKey);
   let keyDraft = $state(ui.apiKey ?? '');
   let voiceDraft = $state(ui.voiceEnabled);
+  let readbackDraft = $state(ui.readbackEnabled);
   let modeDraft = $state<InteractionMode>(ui.mode);
   let modelDraft = $state(ui.model);
   let permissionModeDraft = $state(ui.permissionMode);
@@ -127,6 +139,7 @@
   function openSettings() {
     keyDraft = ui.apiKey ?? '';
     voiceDraft = ui.voiceEnabled;
+    readbackDraft = ui.readbackEnabled;
     modeDraft = ui.mode;
     modelDraft = ui.model;
     permissionModeDraft = ui.permissionMode;
@@ -137,6 +150,7 @@
   function saveSettings() {
     if (keyDraft.trim()) ui.setApiKey(keyDraft);
     if (voiceDraft !== ui.voiceEnabled) ui.toggleVoice();
+    if (readbackDraft !== ui.readbackEnabled) ui.setReadbackEnabled(readbackDraft);
     ui.setMode(modeDraft);
     ui.setModel(modelDraft);
     ui.setPermissionMode(permissionModeDraft);
@@ -378,6 +392,14 @@
       <label>
         Voice Playback
         <select bind:value={voiceDraft}>
+          <option value={true}>On</option>
+          <option value={false}>Off</option>
+        </select>
+      </label>
+
+      <label>
+        Instruction Readback
+        <select bind:value={readbackDraft}>
           <option value={true}>On</option>
           <option value={false}>Off</option>
         </select>

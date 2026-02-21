@@ -93,6 +93,7 @@ interface ConnectDeps {
   apiKey: string;
   getMode: () => InteractionMode;
   correctInstruction: (instruction: string) => Promise<string>;
+  readbackInstruction: (text: string) => () => void;
 }
 
 /**
@@ -238,28 +239,31 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
             console.log(`${ts()} correct mode: running LLM correction`);
             deps.correctInstruction(instruction).then(
               (corrected) => {
+                const stopReadback = deps.readbackInstruction(corrected);
                 data.holdForApproval(
                   { rawInstruction: instruction, instruction: corrected, audioChunks },
-                  executeConverse,
-                  () => { conversePhase = 'idle'; },
+                  (approved) => { stopReadback(); executeConverse(approved); },
+                  () => { stopReadback(); conversePhase = 'idle'; },
                 );
               },
               () => {
                 // Fallback: show uncorrected on LLM error
+                const stopReadback = deps.readbackInstruction(instruction);
                 data.holdForApproval(
                   { instruction, audioChunks },
-                  executeConverse,
-                  () => { conversePhase = 'idle'; },
+                  (approved) => { stopReadback(); executeConverse(approved); },
+                  () => { stopReadback(); conversePhase = 'idle'; },
                 );
               },
             );
           } else {
             // review mode
             console.log(`${ts()} review mode: holding for approval`);
+            const stopReadback = deps.readbackInstruction(instruction);
             data.holdForApproval(
               { instruction, audioChunks },
-              executeConverse,
-              () => { conversePhase = 'idle'; },
+              (approved) => { stopReadback(); executeConverse(approved); },
+              () => { stopReadback(); conversePhase = 'idle'; },
             );
           }
           continue;

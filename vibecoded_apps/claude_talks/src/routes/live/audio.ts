@@ -146,15 +146,16 @@ export function playPcmChunks(
   src.buffer = buffer;
   src.connect(ctx.destination);
   src.start();
+  let closed = false;
   src.onended = () => {
-    void ctx.close();
+    if (!closed) { closed = true; void ctx.close(); }
     onEnded?.();
   };
 
   return {
     stop() {
       try { src.stop(); } catch { /* already stopped */ }
-      void ctx.close();
+      if (!closed) { closed = true; void ctx.close(); }
     },
   };
 }

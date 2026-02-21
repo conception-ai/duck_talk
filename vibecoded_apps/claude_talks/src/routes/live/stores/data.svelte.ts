@@ -31,6 +31,7 @@ interface DataStoreDeps {
   getApiKey: () => string | null;
   getMode: () => InteractionMode;
   correctInstruction: (instruction: string) => Promise<string>;
+  readbackInstruction: (text: string) => () => void;
 }
 
 export function createDataStore(deps: DataStoreDeps) {
@@ -284,6 +285,7 @@ export function createDataStore(deps: DataStoreDeps) {
       apiKey,
       getMode: deps.getMode,
       correctInstruction: deps.correctInstruction,
+      readbackInstruction: deps.readbackInstruction,
     });
     if (!backend) return;
 

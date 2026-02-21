@@ -12,6 +12,7 @@ const STORAGE_KEY = 'claude-talks:ui';
 
 interface Persisted {
   voiceEnabled: boolean;
+  readbackEnabled: boolean;
   apiKey: string | null;
   mode: InteractionMode;
   model: string;
@@ -21,6 +22,7 @@ interface Persisted {
 
 const DEFAULTS: Persisted = {
   voiceEnabled: true,
+  readbackEnabled: false,
   apiKey: null,
   mode: 'direct',
   model: DEFAULT_MODEL,
@@ -50,6 +52,7 @@ function save(state: Persisted) {
 export function createUIStore() {
   const persisted = load();
   let voiceEnabled = $state(persisted.voiceEnabled);
+  let readbackEnabled = $state(persisted.readbackEnabled);
   let apiKey = $state<string | null>(persisted.apiKey);
   let mode = $state<InteractionMode>(persisted.mode);
   let model = $state(persisted.model);
@@ -57,7 +60,7 @@ export function createUIStore() {
   let permissionMode = $state(persisted.permissionMode);
 
   function persist() {
-    save({ voiceEnabled, apiKey, mode, model, systemPrompt, permissionMode });
+    save({ voiceEnabled, readbackEnabled, apiKey, mode, model, systemPrompt, permissionMode });
   }
 
   function toggleVoice() {
@@ -79,6 +82,8 @@ export function createUIStore() {
 
   return {
     get voiceEnabled() { return voiceEnabled; },
+    get readbackEnabled() { return readbackEnabled; },
+    setReadbackEnabled(v: boolean) { readbackEnabled = v; persist(); },
     get apiKey() { return apiKey; },
     get mode() { return mode; },
     toggleVoice,
