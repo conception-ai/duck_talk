@@ -105,7 +105,7 @@ Your code must be clean, minimalist and easy to read.
 ## Locations & commands
 
 - Session files: `~/.claude/projects/-{cwd-with-dashes}/{session-id}.jsonl`
-- Svelte app: `cd vibecoded_apps/claude_talks && npm run dev` (port 5000)
+- Svelte app: `cd vibecoded_apps/claude_talks && npm run dev` (port 5173)
 - Watcher CLI: `python -m claude_talks.watcher /path/to/session.jsonl --handler log`
 - Backend: `uvicorn api.server:app --port 8000 --reload`
 - Test (mock, no credits): `curl -s -N -X POST http://localhost:8000/api/converse/test -H 'Content-Type: application/json' -d '{"instruction":"test"}'`
@@ -160,7 +160,7 @@ const { setup } = await import('/src/lib/test-inject.ts');
 > Two injection sources: **replay from IndexedDB** (free, instant, real audio) or **TTS** (costs API credits, synthetic).
 >
 > 1. `tabs_context_mcp` → get existing tabs, then `tabs_create_mcp` if needed to get a `tabId`
-> 2. `navigate` with `tabId` + `url: "http://localhost:5000/#/live"`
+> 2. `navigate` with `tabId` + `url: "http://localhost:5173/#/live"`
 > 3. `javascript_tool`: setup fake mic + list available replays (BEFORE clicking Start)
 >    ```js
 >    (async () => {
