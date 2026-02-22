@@ -60,6 +60,7 @@ import {
   type Session,
   type LiveServerMessage,
 } from '@google/genai';
+import { createChunkBuffer } from './buffer';
 import { TOOLS, handleToolCall } from './tools';
 import type { AudioSink, ConverseApi, DataStoreMethods, InteractionMode, LiveBackend } from './types';
 
@@ -171,27 +172,12 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
           // Streams Claude's response via SSE and feeds each chunk back to Gemini
           // so it reads the answer aloud.
           const executeConverse = (approvedInstruction: string) => {
-            // Gemini TTS accumulation: buffer chunks for 1s, then passthrough.
-            // Visual display (appendTool) is always immediate.
-            let geminiBuf = '';
-            let geminiFlushed = false;
-            let geminiTimer: ReturnType<typeof setTimeout> | undefined;
-
-            const sendToGemini = (text: string) => {
+            const geminiBuffer = createChunkBuffer((text) => {
               sessionRef?.sendClientContent({
                 turns: [{ role: 'user', parts: [{ text: `[CLAUDE]: ${text}` }] }],
                 turnComplete: true,
               });
-            };
-
-            const flushGeminiBuf = () => {
-              if (geminiBuf) {
-                sendToGemini(geminiBuf);
-                geminiBuf = '';
-              }
-              geminiFlushed = true;
-              geminiTimer = undefined;
-            };
+            }, 1000);
 
             converseApi.stream(approvedInstruction, {
               onChunk(text) {
@@ -205,26 +191,18 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
                   geminiRelayT0 = Date.now();
                   geminiRelayTTFTLogged = false;
                 }
-
-                if (geminiFlushed) {
-                  sendToGemini(text);
-                  return;
-                }
-                geminiBuf += text;
-                if (!geminiTimer) {
-                  geminiTimer = setTimeout(flushGeminiBuf, 1000);
-                }
+                geminiBuffer.push(text);
               },
               onBlock(block) {
                 data.appendBlock(block);
               },
               onDone() {
-                flushGeminiBuf();
+                geminiBuffer.flush();
                 conversePhase = 'idle';
                 data.finishTool();
               },
               onError(msg) {
-                if (geminiTimer) clearTimeout(geminiTimer);
+                geminiBuffer.clear();
                 conversePhase = 'idle';
                 data.finishTool();
                 data.pushError(msg);
