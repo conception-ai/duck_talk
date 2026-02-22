@@ -172,6 +172,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
                   }
                 } else {
                   // Phase 2: stream to Gemini via sendClientContent
+                  console.log(`%c GEMINI %c ${ts()} phase2 chunk (${text.length} chars)`, BLUE_BADGE, DIM);
                   geminiBuffer.push(text);
                 }
               },
@@ -180,6 +181,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
               },
               onDone() {
                 flushAndUnfreeze(); // if Claude finished within buffer window
+                console.log(`%c GEMINI %c ${ts()} onDone — flushing geminiBuffer`, BLUE_BADGE, DIM);
                 geminiBuffer.flush();
                 isRelaying = false;
                 data.finishTool();
