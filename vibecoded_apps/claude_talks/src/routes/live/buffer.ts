@@ -10,9 +10,14 @@ export interface SentenceBuffer {
   clear(): void;
 }
 
+/** Minimum characters before flushing at a sentence boundary */
+const MIN_CHARS = 40;
+/** Fallback flush timeout (ms) when no sentence boundary is found */
+const MAX_WAIT_MS = 1500;
+
 export function createSentenceBuffer(
   onFlush: (text: string) => void,
-  { minChars = 80, maxWaitMs = 3000 } = {},
+  { minChars = MIN_CHARS, maxWaitMs = MAX_WAIT_MS } = {},
 ): SentenceBuffer {
   let buf = '';
   let timer: ReturnType<typeof setTimeout> | undefined;
