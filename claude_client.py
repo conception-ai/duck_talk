@@ -89,6 +89,7 @@ class Claude:
             system_prompt=system_prompt,
             include_partial_messages=True,
             permission_mode=permission_mode,
+            allowed_tools=["Read", "WebSearch"],
             disallowed_tools=["AskUserQuestion", "Skill"],
             stderr=self._stderr,
         )
