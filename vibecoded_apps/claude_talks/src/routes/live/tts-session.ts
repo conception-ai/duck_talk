@@ -33,6 +33,8 @@ export function openTTSSession(apiKey: string): StreamingTTS {
   let closed = false;
   let finishing = false; // set by finish() — close session when queue drains
   let ttsIdle = true;
+  let firstSendT0 = 0; // timestamp of first sendClientContent — for TTFT
+  let ttftLogged = false;
   const queue: string[] = [];
   const preConnectQueue: string[] = [];
 
@@ -40,24 +42,27 @@ export function openTTSSession(apiKey: string): StreamingTTS {
     if (!session || closed) return;
     if (ttsIdle) {
       ttsIdle = false;
-      console.log(`%c TTS %c → send (${text.length} chars)`, GREEN_BADGE, DIM);
+      if (!firstSendT0) firstSendT0 = performance.now();
+      console.log(`%c TTS %c → send: ${text}`, GREEN_BADGE, DIM);
       session.sendClientContent({
         turns: [{ role: 'user', parts: [{ text }] }],
         turnComplete: true,
       });
     } else {
-      console.log(`%c TTS %c → queue (${text.length} chars)`, GREEN_BADGE, DIM);
+      console.log(`%c TTS %c → queue: ${text}`, GREEN_BADGE, DIM);
       queue.push(text);
     }
   }
 
   function drainQueue() {
     if (queue.length > 0) {
-      const next = queue.shift()!;
+      // Join all queued text into one batch — avoids 1.5s gaps between sentences
+      const all = queue.join(' ');
+      queue.length = 0;
       ttsIdle = false;
-      console.log(`%c TTS %c → drain (${next.length} chars)`, GREEN_BADGE, DIM);
+      console.log(`%c TTS %c → drain: ${all}`, GREEN_BADGE, DIM);
       session?.sendClientContent({
-        turns: [{ role: 'user', parts: [{ text: next }] }],
+        turns: [{ role: 'user', parts: [{ text: all }] }],
         turnComplete: true,
       });
     } else if (finishing) {
@@ -89,6 +94,10 @@ export function openTTSSession(apiKey: string): StreamingTTS {
         if (msg.serverContent?.modelTurn?.parts) {
           for (const p of msg.serverContent.modelTurn.parts) {
             if (p.inlineData?.data && !closed) {
+              if (!ttftLogged && firstSendT0) {
+                ttftLogged = true;
+                console.log(`%c TTS %c TTFT: ${Math.round(performance.now() - firstSendT0)}ms`, GREEN_BADGE, DIM);
+              }
               player.play(p.inlineData.data);
             }
           }
