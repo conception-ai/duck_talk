@@ -44,7 +44,10 @@ export function setup(): void {
     await ctx.resume();
     return dest.stream;
   };
-  console.log('[test] audio injection ready');
+  console.warn(
+    '%c[test] getUserMedia OVERRIDDEN — real mic is disabled. Refresh page to restore.',
+    'background:red;color:white;font-weight:bold;padding:2px 8px;border-radius:3px;font-size:14px',
+  );
 }
 
 /** Push base64 PCM audio into the fake mic stream. */
