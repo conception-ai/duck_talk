@@ -5,6 +5,8 @@ Your code must be clean, minimalist and easy to read.
 
 ## Files to read at all times
 
+Batch read them all in a single read. You must read context in a single turnÒ
+
 | File | Purpose |
 |------|---------|
 | @models.py | Session JSONL schema, `fork_session()` (rewind by creating truncated JSONL), `Conversation` loader |
