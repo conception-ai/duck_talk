@@ -17,20 +17,12 @@ Your code must be clean, minimalist and easy to read.
 | @vibecoded_apps/claude_talks/src/routes/live/types.ts | Port interfaces (DataStoreMethods with `back()`, AudioPort, LiveBackend, ConverseApi with `abort()`, StreamingTTS, RealtimeInput) + CC message types (`ContentBlock`, `Message`, `VoiceEvent`) + `InteractionMode` (`'direct' \| 'review' \| 'correct'`) + correction types (STTCorrection, PendingApproval) |
 | @vibecoded_apps/claude_talks/src/routes/live/stores/data.svelte.ts | Data store — two-array model: `messages[]` (CC conversation, mutable) + `voiceLog[]` (ephemeral, append-only). `loadHistory()`, `back()`, session lifecycle, audio buffer, approval flow. No player lifecycle — TTS session owns its own player |
 | @vibecoded_apps/claude_talks/src/routes/live/stores/ui.svelte.ts | UI store — persistent user prefs (apiKey, mode: InteractionMode, model, systemPrompt, readbackEnabled, permissionMode). `setMode()` sets mode directly. `load()` merges localStorage with `DEFAULTS` so new fields get populated. Migrates old `learningMode: boolean` on load |
-| vibecoded_apps/claude_talks/src/routes/live/stores/corrections.svelte.ts | Corrections store — localStorage-persisted STT corrections |
 | @vibecoded_apps/claude_talks/src/routes/live/gemini.ts | Gemini Live connection + message handling (STT + VAD + orchestration only — no TTS). `converse` tool is BLOCKING — Gemini freezes, tool response sent immediately as `{ result: "done" }` (no Claude text → no context contamination). Opens ephemeral TTS session via `openTTSSession()`, feeds Claude chunks to it. `activeTTS` ref enables interrupt (close TTS + abort Claude SSE). `holdWithVoice` wires voice approval during BLOCKING hold. `approvalPending` gates `sendRealtimeInput` |
 | @vibecoded_apps/claude_talks/src/routes/live/tts-session.ts | Ephemeral TTS module — self-contained Gemini Live session that speaks Claude's text. Owns its own connection, sentence buffer, and audio player. One instance per converse call. `send(text)` / `finish()` / `close()` interface. Each sentence-buffer flush sent directly to Gemini (concurrent sends get merged server-side) |
-| vibecoded_apps/claude_talks/src/routes/live/correct.ts | Stateless LLM auto-correction — `correctInstruction(llm, instruction, corrections)`. Text-only today, planned: multimodal with audio (see `roadmap/todos/correction_llm_accuracy.md`) |
 | @vibecoded_apps/claude_talks/src/routes/live/converse.ts | SSE stream consumer for /api/converse. Has `AbortController` + `abort()` method for cancelling in-flight streams (used by `back()`) |
 | @vibecoded_apps/claude_talks/src/routes/live/audio.ts | Browser audio I/O |
 | @vibecoded_apps/claude_talks/src/routes/live/tools.ts | Gemini function declarations (`converse` — BLOCKING, no behavior override) + handlers |
 | @vibecoded_apps/claude_talks/src/routes/live/buffer.ts | Sentence-boundary text buffer — `createSentenceBuffer(onFlush, { minChars, maxWaitMs })`. Accumulates streaming text, flushes at sentence boundaries (`. ` `! ` `? `) when >= minChars accumulated. Timer fallback for text without punctuation |
-| vibecoded_apps/claude_talks/src/routes/live/voice-approval.ts | Browser `webkitSpeechRecognition` wrapper — listens for accept/reject keywords during BLOCKING approval holds. `startVoiceApproval(onAccept, onReject)` → returns `stop()` handle |
-| vibecoded_apps/claude_talks/src/lib/llm.ts | LLM abstraction — `createLLM({ apiKey })` → callable with `.stream()`, `.json<T>()`. Supports multimodal: `Message.content` accepts `string` or `Part[]` (text + `inlineData` for audio/images) |
-| vibecoded_apps/claude_talks/src/lib/stt.ts | Pure audio utilities — `combineChunks` (merge base64 PCM), `chunksToWav` (PCM → WAV). No LLM dependency |
-| vibecoded_apps/claude_talks/src/lib/recording-db.ts | IndexedDB CRUD for utterance recordings — `saveRecording`, `getAllRecordings`, `deleteRecording`, `clearAllRecordings` |
-| vibecoded_apps/claude_talks/src/lib/recorder.ts | Black-box utterance recorder — taps `getUserMedia` to capture mic audio, auto-segments on `utterance-committed` CustomEvents, persists to IndexedDB. Setup called from live `+page.svelte` on mount. Console access via `window.__recorder` |
-| vibecoded_apps/claude_talks/src/routes/recordings/+page.svelte | Recordings browser — reads from IndexedDB, lists utterances with play/download/delete buttons. Route: `/#/recordings` |
 
 ## Files to read if needed
 
@@ -38,7 +30,15 @@ Your code must be clean, minimalist and easy to read.
 |------|---------|
 | docs/gemini-live-docs.md | Gemini Live API reference — capabilities, VAD config, function calling, session management |
 | docs/claude_code_python_sdk.md | Claude Agent SDK reference — `ClaudeAgentOptions`, `ClaudeSDKClient`, `query()`. No leaf/branch control exists; `resume` is session ID only |
-| @vibecoded_apps/claude_talks/src/lib/tts.ts | Test-only TTS utility — `speak(apiKey, text)` → base64 PCM at 24kHz via Gemini TTS. Dynamically imported by Claude in Chrome test scripts (`import('/src/lib/tts.ts')`), never imported by production code |
+| vibecoded_apps/claude_talks/src/lib/tts.ts | Test-only TTS utility — `speak(apiKey, text)` → base64 PCM at 24kHz via Gemini TTS. Dynamically imported by Claude in Chrome test scripts (`import('/src/lib/tts.ts')`), never imported by production code |
+| vibecoded_apps/claude_talks/src/routes/live/stores/corrections.svelte.ts | Corrections store — localStorage-persisted STT corrections |
+| vibecoded_apps/claude_talks/src/routes/live/correct.ts | Stateless LLM auto-correction — `correctInstruction(llm, instruction, corrections)`. Text-only today, planned: multimodal with audio (see `roadmap/todos/correction_llm_accuracy.md`) |
+| vibecoded_apps/claude_talks/src/routes/live/voice-approval.ts | Browser `webkitSpeechRecognition` wrapper — listens for accept/reject keywords during BLOCKING approval holds. `startVoiceApproval(onAccept, onReject)` → returns `stop()` handle |
+| vibecoded_apps/claude_talks/src/lib/llm.ts | LLM abstraction — `createLLM({ apiKey })` → callable with `.stream()`, `.json<T>()`. Supports multimodal: `Message.content` accepts `string` or `Part[]` (text + `inlineData` for audio/images) |
+| vibecoded_apps/claude_talks/src/lib/stt.ts | Pure audio utilities — `combineChunks` (merge base64 PCM), `chunksToWav` (PCM → WAV). No LLM dependency |
+| vibecoded_apps/claude_talks/src/lib/recording-db.ts | IndexedDB CRUD for utterance recordings — `saveRecording`, `getAllRecordings`, `deleteRecording`, `clearAllRecordings` |
+| vibecoded_apps/claude_talks/src/lib/recorder.ts | Black-box utterance recorder — taps `getUserMedia` to capture mic audio, auto-segments on `utterance-committed` CustomEvents, persists to IndexedDB. Setup called from live `+page.svelte` on mount. Console access via `window.__recorder` |
+| vibecoded_apps/claude_talks/src/routes/recordings/+page.svelte | Recordings browser — reads from IndexedDB, lists utterances with play/download/delete buttons. Route: `/#/recordings` |
 
 ## Guiding Principles
 
@@ -99,6 +99,8 @@ Your code must be clean, minimalist and easy to read.
 - **LLM correction timing** (`correct` mode): the `correctInstruction` call fires synchronously when the tool call arrives, but it's async (~2s round-trip to Gemini Flash). During those 2s the user sees a pending tool with no approval buttons. Gemini sends `turnComplete` during this window. The `.then()` callback in `gemini.ts:210` is where `holdForApproval` finally gets called. On LLM error, falls back to uncorrected instruction.
 - **`correctInstruction` DI closure** (`+page.svelte:28-32`): the closure creates `createLLM({ apiKey })` on each call. This is safe — `llm.ts` caches clients by API key internally (`getClient()`). The closure also reads `corrections.corrections` at call time (not creation time), so corrections added mid-session are picked up.
 - **UI layout** (`+page.svelte`): Header: Home | Settings. Mic orb at bottom center — grey when idle (tap to start), green with CSS pulse rings when connected (tap to stop). Always VAD, no PTT. Settings modal consolidates: API key, readback, mode, permission mode, model, system prompt, corrections link. Auto-opens on first visit if no API key.
+- **TTS injection sample rate** (`test-inject.ts`): The fake mic `AudioContext` runs at 16kHz. TTS (`speak()`) outputs 24kHz. Injecting 24kHz audio directly into a 16kHz context silently fails — no error, but no audio reaches the PCM worklet. `inject()` now auto-resamples via `OfflineAudioContext` when `sampleRate !== 16000`. IndexedDB replays are already 16kHz and skip resampling. Also: `inject()` is now `async` (returns `Promise<void>`) due to the resampling step.
+- **TTS injection timing**: `speak()` takes ~10s round-trip. The Gemini preview model disconnects after ~5s of silence. Pre-generate TTS audio BEFORE clicking Start, cache on `window.__pregenAudio`, then inject immediately after `connected` appears.
 - **Utterance recorder** (`recorder.ts`): Black-box getUserMedia tap — runs a parallel AudioWorklet (`recorder-proc`) alongside the app's `pcm-processor`. Both consume the same MediaStream independently. Auto-segments via `utterance-committed` CustomEvent emitted from `commitTurn()` in `data.svelte.ts` (1 line). Persists to IndexedDB via `recording-db.ts`. `setup()` is called from live `+page.svelte` on mount (before `startMic()`). Console: `window.__recorder.recordings`, `.segment()`, `.download(i)`. Recordings page at `/#/recordings` reads from same IndexedDB.
 
 ## Locations & commands
@@ -156,42 +158,38 @@ const { setup } = await import('/src/lib/test-inject.ts');
 
 **Programmatic audio injection** — no mic needed:
 > Uses `test-inject.ts` module to inject audio into a fake mic stream.
-> Two injection sources: **replay from IndexedDB** (free, instant, real audio) or **TTS** (costs API credits, synthetic).
+> Primary method is **TTS** via `speak()`. Auto-resamples 24kHz→16kHz internally.
 >
 > 1. `tabs_context_mcp` → get existing tabs, then `tabs_create_mcp` if needed to get a `tabId`
 > 2. `navigate` with `tabId` + `url: "http://localhost:5173/#/live"`
-> 3. `javascript_tool`: setup fake mic + list available replays (BEFORE clicking Start)
+> 3. `javascript_tool`: setup fake mic AND pre-generate TTS audio (BEFORE clicking Start — `speak()` takes ~10s, Gemini disconnects after ~5s idle)
 >    ```js
 >    (async () => {
->      const { setup, listReplays } = await import('/src/lib/test-inject.ts');
+>      const { setup } = await import('/src/lib/test-inject.ts');
 >      setup();
->      return JSON.stringify(await listReplays());
+>      const { speak } = await import('/src/lib/tts.ts');
+>      const key = JSON.parse(localStorage.getItem('claude-talks:ui') || '{}').apiKey;
+>      const { data, sampleRate } = await speak(key, 'What is the latest commit?');
+>      window.__pregenAudio = { data, sampleRate };
+>      return 'setup + TTS ready';
 >    })()
 >    ```
-> 4. Click the mic orb (use `find` to locate it, then `computer` to click). Wait for `[live] connected` via `read_console_messages` with `pattern: "connected"`.
-> 5. `javascript_tool`: inject — **Option A: replay from IndexedDB** (preferred)
->    ```js
->    (async () => {
->      const { injectFromDB } = await import('/src/lib/test-inject.ts');
->      return await injectFromDB(0); // returns transcript
->    })()
->    ```
->    **Option B: TTS** (when no recordings exist or need specific text)
+> 4. Click the mic orb (use `find` to locate it, then `computer` to click). Wait for `connected` via `read_console_messages` with `pattern: "connected"`.
+> 5. `javascript_tool`: inject the pre-generated audio immediately
 >    ```js
 >    (async () => {
 >      const { inject } = await import('/src/lib/test-inject.ts');
->      const { speak } = await import('/src/lib/tts.ts');
->      const key = JSON.parse(localStorage.getItem('claude-talks:ui') || '{}').apiKey;
->      const { data, sampleRate } = await speak(key, 'What are my todos in the todos folder? OVER.');
->      inject(data, sampleRate);
+>      await inject(window.__pregenAudio.data, window.__pregenAudio.sampleRate);
 >      return 'injected';
 >    })()
 >    ```
 > 6. Verify via `read_console_messages`: `[test] injected N samples` → `tool call: converse` → `TTFT: Nms`
 >
 > **Critical**: `setup()` must run BEFORE clicking Start — the getUserMedia override must be in place when the app first calls it.
+> **Critical**: Pre-generate TTS BEFORE connecting — `speak()` latency races against Gemini's ~5s idle disconnect.
 > **VAD only**: injection relies on VAD to detect end-of-speech from silence.
-> **Replays**: recordings are saved to IndexedDB automatically during live sessions (via `recorder.ts`). Use `listReplays()` to see what's available.
+>
+> **Legacy: IndexedDB replay** (deprecated, still works): `injectFromDB(index)` replays previously recorded utterances from IndexedDB. Free and instant but limited to whatever was recorded in past sessions. Use `listReplays()` to see available recordings.
 ## Instructions
 
 Read, digest then ask me questions if needed.
