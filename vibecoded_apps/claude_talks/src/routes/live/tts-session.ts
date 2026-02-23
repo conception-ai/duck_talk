@@ -36,7 +36,10 @@ export function openTTSSession(apiKey: string): StreamingTTS {
   const preConnectQueue: string[] = [];
 
   function sendText(text: string) {
-    if (!session || closed) return;
+    if (!session || closed) {
+      console.warn(`%c TTS %c dropped (session dead): ${text}`, GREEN_BADGE, DIM);
+      return;
+    }
     if (!firstSendT0) firstSendT0 = performance.now();
     pendingSends++;
     console.log(`%c TTS %c ← [${pendingSends}] ${text}`, GREEN_BADGE, DIM);
@@ -89,8 +92,10 @@ export function openTTSSession(apiKey: string): StreamingTTS {
       onerror: (e) => {
         console.error(`%c TTS %c error`, GREEN_BADGE, DIM, e);
       },
-      onclose: () => {
-        console.log(`%c TTS %c closed`, GREEN_BADGE, DIM);
+      onclose: (e: CloseEvent) => {
+        closed = true;
+        session = null;
+        console.log(`%c TTS %c closed (code=${e.code} reason=${e.reason || 'none'})`, GREEN_BADGE, DIM);
       },
     },
   }).then((s) => {
