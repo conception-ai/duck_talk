@@ -116,6 +116,10 @@
 
   let resultMap = $derived(buildToolResultMap(live.messages));
 
+  // --- Backend config name ---
+  let configName = $state('');
+  fetch('/api/config').then(r => r.json()).then(d => { configName = d.config; }).catch(() => {});
+
   // --- Settings modal state ---
   let settingsOpen = $state(!ui.apiKey);
   let keyDraft = $state(ui.apiKey ?? '');
@@ -427,6 +431,10 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="modal settings-modal" onkeydown={() => {}} onclick={(e) => e.stopPropagation()}>
       <h2>Settings</h2>
+
+      {#if configName}
+        <div class="config-badge">Config: {configName}</div>
+      {/if}
 
       <label>
         API Key
@@ -1033,6 +1041,15 @@
   .settings-modal textarea {
     resize: vertical;
     min-height: 120px;
+  }
+
+  .config-badge {
+    font-size: 0.75rem;
+    color: #6b7280;
+    background: #f3f4f6;
+    padding: 0.3rem 0.6rem;
+    border-radius: 0.25rem;
+    font-family: monospace;
   }
 
   .corrections-link {

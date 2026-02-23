@@ -130,6 +130,7 @@ class Claude:
         system_prompt: str,
         session_id: str | None = None,
         permission_mode: PermissionMode = "plan",
+        fork: bool = False,
     ) -> AsyncIterator[Chunk]:
         options = ClaudeAgentOptions(
             model=model,
@@ -144,8 +145,8 @@ class Claude:
             stderr=self._stderr,
         )
         if session_id:
-            options = replace(options, resume=session_id)
-            log.info("resuming session %s", session_id)
+            options = replace(options, resume=session_id, fork_session=fork)
+            log.info("resuming session %s (fork=%s)", session_id, fork)
 
         log.info("query: %s", message[:120])
         async for msg in query(prompt=message, options=options):

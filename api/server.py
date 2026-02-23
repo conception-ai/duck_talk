@@ -40,6 +40,11 @@ claude = Claude(cwd=config.cwd)
 _PROJECT_DIR = config.project_dir
 
 
+@app.get("/api/config")
+def get_config() -> dict[str, str]:
+    return {"config": CONFIG_KEY}
+
+
 class SessionInfo(BaseModel):
     id: str
     name: str
@@ -234,10 +239,12 @@ async def converse(body: ConverseRequest) -> StreamingResponse:
     )
 
     session_id = body.session_id
+    should_fork = False
     if body.leaf_uuid and body.session_id:
         path = _PROJECT_DIR / f"{body.session_id}.jsonl"
         if path.is_file():
             session_id = fork_session(str(path), body.leaf_uuid)
+            should_fork = True
             log.info(
                 "forked session %s → %s at leaf %s",
                 body.session_id,
@@ -253,6 +260,7 @@ async def converse(body: ConverseRequest) -> StreamingResponse:
             model=body.model,
             system_prompt=body.system_prompt,
             permission_mode=body.permission_mode,
+            fork=should_fork,
         ):
             if isinstance(chunk, TextDelta):
                 if chunk.text:
