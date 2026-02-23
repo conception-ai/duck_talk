@@ -41,7 +41,6 @@
       rafId = requestAnimationFrame(tick);
     }
     rafId = requestAnimationFrame(tick);
-    simState = 'recording';
   }
 
   function stopRecording() {
@@ -163,7 +162,7 @@
     simState = s;
 
     if (s === 'recording') {
-      const words = 'Fix the authentication bug in the login flow please'.split(' ');
+      const words = 'I want you to refactor the authentication module so that it uses JWT tokens instead of session cookies and also add a refresh token rotation mechanism and make sure the token expiry is configurable through environment variables and please add proper error handling for expired tokens with a clear error message that tells the user to log in again and also write tests for all of this'.split(' ');
       let wi = 0;
       simInterval = setInterval(() => {
         if (wi < words.length) {
@@ -175,7 +174,7 @@
     }
 
     if (s === 'approval') {
-      transcription = 'Fix the authentication bug in the login flow please';
+      transcription = 'I want you to refactor the authentication module so that it uses JWT tokens instead of session cookies and also add a refresh token rotation mechanism and make sure the token expiry is configurable through environment variables and please add proper error handling for expired tokens with a clear error message that tells the user to log in again and also write tests for all of this';
       startRecording();
     }
 
@@ -277,7 +276,7 @@
 
     {#if simState === 'approval'}
       <div class="float approval">
-        <p>{transcription}</p>
+        <div class="approval-text"><p>{transcription}</p></div>
         <div class="approval-actions">
           <button class="btn-accept" onclick={() => setState('streaming')}>Accept</button>
           <button class="btn-secondary" onclick={() => setState('approval')}>Edit</button>
@@ -505,7 +504,14 @@
     border: 1px solid #e0e0e0;
     color: #555;
     font-style: italic;
+    display: flex;
+    flex-direction: column-reverse;
+    max-height: 8rem;
+    overflow-y: auto;
+    scrollbar-width: none;
   }
+
+  .float.transcription::-webkit-scrollbar { display: none; }
 
   .float.transcription p { margin: 0; }
 
@@ -515,7 +521,15 @@
     color: #1a1a1a;
   }
 
-  .float.approval p { margin: 0 0 0.5rem; }
+  .approval-text {
+    max-height: 6rem;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+
+  .approval-text::-webkit-scrollbar { display: none; }
+
+  .approval-text p { margin: 0; }
 
   .approval-actions {
     display: flex;
