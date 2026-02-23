@@ -67,7 +67,7 @@
       });
   }
 
-  // --- Helper: extract text from a message for display ---
+  // --- Helpers ---
   function messageText(msg: Message): string {
     if (typeof msg.content === 'string') return msg.content;
     return msg.content
@@ -215,14 +215,60 @@
     editing = false;
   }
 
+  // --- Audio-reactive waveform ---
+  const NUM_BARS = 16;
+  let audioLevels = $state<number[]>(new Array(NUM_BARS).fill(0));
+  let waveCtx: AudioContext | null = null;
+  let waveStream: MediaStream | null = null;
+  let waveRaf = 0;
+
+  function startWaveform() {
+    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+      const ctx = new AudioContext({ sampleRate: 16000 });
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      waveCtx = ctx;
+      waveStream = stream;
+      const buf = new Float32Array(analyser.fftSize);
+      const segSize = Math.floor(buf.length / NUM_BARS);
+      function animate() {
+        analyser.getFloatTimeDomainData(buf);
+        audioLevels = Array.from({ length: NUM_BARS }, (_, i) => {
+          let sum = 0;
+          for (let j = 0; j < segSize; j++) { const v = buf[i * segSize + j]; sum += v * v; }
+          return Math.min(1, Math.sqrt(sum / segSize) * 3);
+        });
+        waveRaf = requestAnimationFrame(animate);
+      }
+      waveRaf = requestAnimationFrame(animate);
+    }).catch((e) => console.warn('[waveform] getUserMedia failed:', e));
+  }
+
+  function stopWaveform() {
+    cancelAnimationFrame(waveRaf);
+    waveStream?.getTracks().forEach(t => t.stop());
+    if (waveCtx && waveCtx.state !== 'closed') void waveCtx.close();
+    waveCtx = null; waveStream = null;
+    audioLevels = new Array(NUM_BARS).fill(0);
+  }
 
   let messagesEl: HTMLDivElement;
 
+  // Auto-scroll chat on new content
   $effect(() => {
     void live.messages.length;
-    void live.pendingInput;
     void live.pendingTool?.text;
     tick().then(() => messagesEl?.scrollTo(0, messagesEl.scrollHeight));
+  });
+
+  // Sync waveform with connection status
+  $effect(() => {
+    if (live.status === 'connected') {
+      startWaveform();
+      return stopWaveform;
+    }
   });
 </script>
 
@@ -236,7 +282,7 @@
 <main>
   <header>
     <button class="header-link" onclick={() => push('/')}>Home</button>
-    <span class="header-spacer"></span>
+    <span class="spacer"></span>
     <button class="header-link" onclick={openSettings}>Settings</button>
   </header>
 
@@ -244,90 +290,123 @@
     <p class="loading">Loading conversation...</p>
   {/if}
 
-  <!-- CC Messages (persistent conversation) -->
-  <div class="scroll-area" bind:this={messagesEl}>
-  <div class="messages">
-    {#each live.messages as msg, i}
-      {#if !isToolResultOnly(msg)}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="msg {msg.role}"
-             onmouseenter={() => hoveredMsg = i}
-             onmouseleave={() => hoveredMsg = null}>
-          {#if hoveredMsg === i && i > 0 && msg.uuid}
-            <button class="rewind-btn" onclick={() => live.rewindTo(i)}>Rewind</button>
-          {/if}
-          {#if messageText(msg)}
-            {#if msg.role === 'assistant'}
-              <div class="markdown">{@html marked.parse(messageText(msg))}</div>
-            {:else}
-              <p>{messageText(msg)}</p>
+  <!-- Zone 1: Chat (scrollable) -->
+  <div class="chat-scroll" bind:this={messagesEl}>
+    <div class="chat">
+      {#each live.messages as msg, i}
+        {#if !isToolResultOnly(msg)}
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="bubble {msg.role}"
+               onmouseenter={() => hoveredMsg = i}
+               onmouseleave={() => hoveredMsg = null}>
+            {#if hoveredMsg === i && i > 0 && msg.uuid}
+              <button class="rewind-btn" onclick={() => live.rewindTo(i)}>Rewind</button>
             {/if}
+            {#if msg.role === 'user'}
+              <p>{messageText(msg)}</p>
+            {:else}
+              {#each messageThinking(msg) as think}
+                <details class="thinking">
+                  <summary>Thinking...</summary>
+                  <p>{think}</p>
+                </details>
+              {/each}
+              {#if messageText(msg)}
+                <div class="prose">{@html marked.parse(messageText(msg))}</div>
+              {/if}
+              {#each messageToolUses(msg) as tool}
+                <details class="tool-use">
+                  <summary><span class="tool-pill">{tool.name}</span></summary>
+                  {#if tool.input.instruction}
+                    <p class="tool-args">{tool.input.instruction}</p>
+                  {:else if Object.keys(tool.input).length}
+                    <p class="tool-args">{JSON.stringify(tool.input)}</p>
+                  {/if}
+                  {#if resultMap.get(tool.id)}
+                    <p class="tool-text">{resultMap.get(tool.id)}</p>
+                  {/if}
+                </details>
+              {/each}
+            {/if}
+          </div>
+        {/if}
+      {/each}
+
+      <!-- Streaming Claude response (faded) -->
+      {#if live.pendingTool && !live.pendingApproval}
+        <div class="bubble assistant streaming">
+          {#if live.pendingTool.text}
+            <div class="prose">{@html marked.parse(live.pendingTool.text)}</div>
           {/if}
-          {#each messageThinking(msg) as think}
-            <details class="thinking">
-              <summary>Thinking...</summary>
-              <p>{think}</p>
-            </details>
-          {/each}
-          {#each messageToolUses(msg) as tool}
-            <details class="tool-use">
-              <summary><span class="tool-pill">{tool.name}</span></summary>
-              {#if tool.input.instruction}
-                <p class="tool-args">{tool.input.instruction}</p>
-              {:else if Object.keys(tool.input).length}
-                <p class="tool-args">{JSON.stringify(tool.input)}</p>
-              {/if}
-              {#if resultMap.get(tool.id)}
-                <p class="tool-text">{resultMap.get(tool.id)}</p>
-              {/if}
-            </details>
-          {/each}
+          {#if live.pendingTool.streaming}
+            <div class="dots"><span></span><span></span><span></span></div>
+          {/if}
         </div>
       {/if}
-    {/each}
+    </div>
+  </div>
 
-    <!-- Pending: live transcription -->
-    {#if live.pendingInput}
-      <div class="msg user pending">
+  <!-- Zone 2+3: Dock (float + input bar) -->
+  <div class="dock">
+    <!-- Transcription float -->
+    {#if live.pendingInput && live.status === 'connected'}
+      <div class="float transcription">
         <p>{live.pendingInput}</p>
       </div>
     {/if}
 
-    <!-- Pending: Claude thinking / streaming / approval -->
-    {#if live.pendingTool}
-      {#if live.pendingApproval}
-        <div class="msg assistant approval">
-          <p>{live.pendingApproval.instruction}</p>
-          {#if editing}
-            <textarea class="edit-instruction" bind:value={editDraft}></textarea>
-            <div class="approval-actions">
-              <button class="approve-btn" onclick={handleSubmitEdit}>Submit</button>
-              <button onclick={handleCancelEdit}>Cancel</button>
-            </div>
-          {:else}
-            <div class="approval-actions">
-              {#if live.pendingApproval.audioChunks.length}
-                <button class="correction-play" onclick={playApprovalAudio}>
-                  {playingId === 'approval' ? '\u25A0' : '\u25B6'}
-                </button>
-              {/if}
-              <button class="approve-btn" onclick={handleAccept}>Accept</button>
-              <button onclick={handleStartEdit}>Edit</button>
-              <button class="reject-btn" onclick={handleReject}>Reject</button>
-            </div>
-          {/if}
-        </div>
-      {:else if live.pendingTool.text}
-        <div class="msg assistant pending">
-          <div class="markdown">{@html marked.parse(live.pendingTool.text)}</div>
-        </div>
-      {:else}
-        <div class="msg assistant pending">
-          <p class="thinking-dots"><span></span><span></span><span></span></p>
-        </div>
-      {/if}
+    <!-- Approval float -->
+    {#if live.pendingApproval}
+      <div class="float approval">
+        <div class="approval-text"><p>{live.pendingApproval.instruction}</p></div>
+        {#if editing}
+          <textarea class="edit-instruction" bind:value={editDraft}></textarea>
+          <div class="approval-actions">
+            <button class="btn-accept" onclick={handleSubmitEdit}>Submit</button>
+            <button class="btn-secondary" onclick={handleCancelEdit}>Cancel</button>
+          </div>
+        {:else}
+          <div class="approval-actions">
+            {#if live.pendingApproval.audioChunks.length}
+              <button class="btn-secondary correction-play" onclick={playApprovalAudio}>
+                {playingId === 'approval' ? '\u25A0' : '\u25B6'}
+              </button>
+            {/if}
+            <button class="btn-accept" onclick={handleAccept}>Accept</button>
+            <button class="btn-secondary" onclick={handleStartEdit}>Edit</button>
+            <button class="btn-reject" onclick={handleReject}>Reject</button>
+          </div>
+        {/if}
+      </div>
     {/if}
-  </div>
+
+    <!-- Input bar -->
+    <div class="input-bar">
+      {#if live.status === 'connected'}
+        <div class="waveform">
+          {#each audioLevels as level}
+            <span class="bar" style="height: {4 + level * 24}px"></span>
+          {/each}
+        </div>
+        <button class="mic-btn active" onclick={() => live.stop()}>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <rect x="6" y="6" width="12" height="12" rx="2" />
+          </svg>
+        </button>
+      {:else}
+        <span class="placeholder">Reply...</span>
+        <button
+          class="mic-btn"
+          class:pulsing={live.pendingTool?.streaming}
+          disabled={live.status === 'connecting'}
+          onclick={() => live.start()}
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z" />
+          </svg>
+        </button>
+      {/if}
+    </div>
   </div>
 
   <!-- Toast -->
@@ -335,29 +414,7 @@
     <div class="toast">{live.toast}</div>
   {/if}
 
-  <!-- Input bar -->
-  <div class="input-bar">
-    {#if live.status === 'connected'}
-      <div class="waveform">
-        {#each [1.0, 0.8, 1.15, 0.85, 1.05] as dur, i}
-          <span class="wave-bar" style="animation-duration: {dur}s; animation-delay: {i * 0.12}s"></span>
-        {/each}
-      </div>
-    {:else}
-      <textarea class="input-field" placeholder="Reply..." disabled rows="1"></textarea>
-    {/if}
-    <button
-      class="mic-btn"
-      class:connected={live.status === 'connected'}
-      class:connecting={live.status === 'connecting'}
-      disabled={live.status === 'connecting'}
-      onclick={() => live.status === 'idle' ? live.start() : live.stop()}
-    >
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
-      </svg>
-    </button>
-  </div>
+  <!-- Permission mode -->
   <button class="mode-status" class:mode-accept={ui.permissionMode !== 'plan'} onclick={() => ui.cyclePermissionMode()}>
     {ui.permissionMode === 'plan' ? 'plan' : 'accept edits'} (shift+tab to cycle)
   </button>
@@ -465,45 +522,40 @@
 {/if}
 
 <style>
+  /* --- Layout --- */
   main {
     width: 100%;
     height: 100dvh;
-    box-sizing: border-box;
-    font-family: system-ui, sans-serif;
     display: flex;
     flex-direction: column;
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #fafafa;
+    color: #1a1a1a;
   }
 
   header {
     display: flex;
     align-items: center;
-    gap: 1rem;
-    margin-bottom: 0.5rem;
-    max-width: 600px;
+    padding: 0.5rem 1rem;
+    max-width: 640px;
     width: 100%;
-    margin-left: auto;
-    margin-right: auto;
-    padding: 0.5rem 1rem 0;
+    margin: 0 auto;
     box-sizing: border-box;
   }
 
   .header-link {
     font-size: 0.8rem;
-    color: #9ca3af;
+    color: #888;
     border: none;
-    padding: 0.25rem 0;
     background: none;
     cursor: pointer;
+    padding: 0.25rem 0;
   }
 
-  .header-link:hover {
-    color: #374151;
-  }
+  .header-link:hover { color: #333; }
+  .spacer { flex: 1; }
 
-  .header-spacer {
-    flex: 1;
-  }
-
+  /* Global button reset (modals depend on this) */
   button {
     padding: 0.5rem 1.5rem;
     font-size: 0.9rem;
@@ -523,6 +575,401 @@
     text-align: center;
   }
 
+  /* --- Chat --- */
+  .chat-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .chat {
+    max-width: 640px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 0.5rem 1rem 1rem;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .bubble {
+    position: relative;
+    max-width: 85%;
+    line-height: 1.5;
+    font-size: 0.9rem;
+  }
+
+  .bubble.user {
+    align-self: flex-end;
+    background: #f0f0f0;
+    padding: 0.5rem 0.75rem;
+    border-radius: 1rem 1rem 0.25rem 1rem;
+  }
+
+  .bubble.user p { margin: 0; }
+
+  .bubble.assistant {
+    align-self: flex-start;
+    padding: 0.25rem 0;
+  }
+
+  .bubble.streaming {
+    opacity: 0.7;
+  }
+
+  /* --- Rewind --- */
+  .rewind-btn {
+    position: absolute;
+    top: 0;
+    right: 0;
+    font-size: 0.65rem;
+    padding: 0.15rem 0.5rem;
+    color: #9ca3af;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.25rem;
+    background: white;
+    cursor: pointer;
+    opacity: 0;
+    animation: fade-in 0.15s ease-out forwards;
+  }
+
+  .rewind-btn:hover {
+    color: #dc2626;
+    border-color: #dc2626;
+  }
+
+  @keyframes fade-in {
+    to { opacity: 1; }
+  }
+
+  /* --- Markdown prose --- */
+  .prose :global(p) { margin: 0.25rem 0; }
+  .prose :global(strong) { font-weight: 600; }
+  .prose :global(code) {
+    font-size: 0.82rem;
+    background: rgba(0,0,0,0.05);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+  }
+  .prose :global(pre) {
+    margin: 0.4rem 0;
+    padding: 0.5rem;
+    background: rgba(0,0,0,0.04);
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.8rem;
+  }
+  .prose :global(pre code) { background: none; padding: 0; }
+  .prose :global(ol), .prose :global(ul) {
+    margin: 0.25rem 0;
+    padding-left: 1.25rem;
+  }
+  .prose :global(h1), .prose :global(h2), .prose :global(h3) {
+    margin: 0.5rem 0 0.25rem;
+    font-size: 0.95rem;
+    font-weight: 700;
+  }
+  .prose :global(blockquote) {
+    margin: 0.25rem 0;
+    padding-left: 0.75rem;
+    border-left: 3px solid rgba(0,0,0,0.15);
+    color: #6b7280;
+  }
+
+  /* --- Thinking --- */
+  .thinking {
+    font-size: 0.8rem;
+    color: #999;
+    margin-bottom: 0.25rem;
+  }
+
+  .thinking summary {
+    cursor: pointer;
+    font-style: italic;
+  }
+
+  .thinking p {
+    white-space: pre-wrap;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  /* --- Tool use --- */
+  .tool-use {
+    margin-top: 0.25rem;
+    padding: 0;
+    border: none;
+    background: none;
+  }
+
+  .tool-use summary {
+    list-style: none;
+    cursor: pointer;
+    display: inline-block;
+  }
+
+  .tool-use summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .tool-pill {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-family: monospace;
+    padding: 0.15rem 0.5rem;
+    border-radius: 1rem;
+    background: #ede9fe;
+    color: #7c3aed;
+  }
+
+  .tool-args {
+    font-size: 0.8rem;
+    font-style: italic;
+    color: #6b7280;
+    margin: 0.25rem 0 0;
+    padding: 0.4rem 0.6rem;
+    background: #f9fafb;
+    border-radius: 0.25rem;
+    border: 1px solid #e5e7eb;
+  }
+
+  .tool-text {
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    max-height: 200px;
+    overflow-y: auto;
+    color: #374151;
+  }
+
+  /* --- Dots --- */
+  .dots {
+    display: flex;
+    gap: 4px;
+    margin-top: 0.5rem;
+  }
+
+  .dots span {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #999;
+    animation: dot-pulse 1.4s ease-in-out infinite;
+  }
+  .dots span:nth-child(2) { animation-delay: 0.2s; }
+  .dots span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes dot-pulse {
+    0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+    40% { opacity: 1; transform: scale(1); }
+  }
+
+  /* --- Dock (bottom area) --- */
+  .dock {
+    flex-shrink: 0;
+    max-width: 640px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 0 0.75rem 0.5rem;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  /* --- Float (transcription + approval) --- */
+  .float {
+    padding: 0.6rem 0.75rem;
+    border-radius: 0.75rem;
+    font-size: 0.85rem;
+    animation: slide-up 0.15s ease-out;
+  }
+
+  .float.transcription {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid #e0e0e0;
+    color: #555;
+    font-style: italic;
+    display: flex;
+    flex-direction: column-reverse;
+    max-height: 8rem;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+
+  .float.transcription::-webkit-scrollbar { display: none; }
+  .float.transcription p { margin: 0; }
+
+  .float.approval {
+    background: white;
+    border: 1.5px solid #059669;
+    color: #1a1a1a;
+  }
+
+  .approval-text {
+    max-height: 6rem;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+
+  .approval-text::-webkit-scrollbar { display: none; }
+  .approval-text p { margin: 0; }
+
+  .edit-instruction {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 3rem;
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    font-size: 0.85rem;
+    font-family: inherit;
+    border: 1px solid #d1d5db;
+    border-radius: 0.25rem;
+    resize: vertical;
+  }
+
+  .approval-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    justify-content: flex-end;
+  }
+
+  .approval-actions button {
+    font-size: 0.8rem;
+    padding: 0.3rem 0.75rem;
+    border-radius: 0.25rem;
+  }
+
+  .approval-actions .correction-play {
+    margin-right: auto;
+  }
+
+  .btn-accept { color: #059669; border-color: #059669; }
+  .btn-accept:hover { background: #059669; color: white; }
+  .btn-secondary { color: #666; border-color: #ccc; }
+  .btn-reject { color: #dc2626; border-color: #dc2626; }
+  .btn-reject:hover { background: #dc2626; color: white; }
+
+  @keyframes slide-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* --- Input bar --- */
+  .input-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.5rem 0.4rem 0.75rem;
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+
+  .placeholder {
+    flex: 1;
+    font-size: 0.85rem;
+    color: #aaa;
+  }
+
+  /* --- Waveform --- */
+  .waveform {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 0.2rem 0;
+  }
+
+  .bar {
+    width: 3px;
+    border-radius: 1.5px;
+    background: #059669;
+    transition: height 0.1s ease-out;
+    min-height: 4px;
+  }
+
+  /* --- Mic button --- */
+  .mic-btn {
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: none;
+    background: #eee;
+    color: #666;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .mic-btn:hover { background: #ddd; }
+
+  .mic-btn.active {
+    background: #dc2626;
+    color: white;
+  }
+
+  .mic-btn.pulsing {
+    animation: gentle-pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes gentle-pulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+  }
+
+  /* --- Mode status --- */
+  .mode-status {
+    flex-shrink: 0;
+    align-self: center;
+    font-size: 0.7rem;
+    color: #059669;
+    border: none;
+    background: none;
+    padding: 0.25rem 0;
+    cursor: pointer;
+  }
+
+  .mode-status:hover { opacity: 0.7; }
+  .mode-status.mode-accept { color: #7c3aed; }
+
+  /* --- Toast --- */
+  .toast {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    max-width: 360px;
+    padding: 0.6rem 1rem;
+    background: #fef2f2;
+    color: #991b1b;
+    border: 1px solid #fecaca;
+    border-radius: 0.5rem;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    animation: toast-in 0.2s ease-out;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    z-index: 200;
+  }
+
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(-0.5rem); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* --- Modals --- */
   .backdrop {
     position: fixed;
     inset: 0;
@@ -543,10 +990,7 @@
     gap: 1rem;
   }
 
-  .modal h2 {
-    margin: 0;
-    font-size: 1.1rem;
-  }
+  .modal h2 { margin: 0; font-size: 1.1rem; }
 
   .modal input {
     padding: 0.5rem;
@@ -563,9 +1007,7 @@
     gap: 0.5rem;
   }
 
-  .settings-modal {
-    width: min(550px, 90vw);
-  }
+  .settings-modal { width: min(550px, 90vw); }
 
   .settings-modal label {
     display: flex;
@@ -608,238 +1050,7 @@
     border-color: #93c5fd;
   }
 
-  .scroll-area {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-  }
-
-  .messages {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    max-width: 600px;
-    width: 100%;
-    margin: 0 auto;
-    padding: 0.5rem 1rem;
-    box-sizing: border-box;
-  }
-
-  .msg {
-    position: relative;
-    padding: 0.5rem 0;
-    max-width: 85%;
-  }
-
-  .rewind-btn {
-    position: absolute;
-    top: 0;
-    right: 0;
-    font-size: 0.65rem;
-    padding: 0.15rem 0.5rem;
-    color: #9ca3af;
-    border: 1px solid #e5e7eb;
-    border-radius: 0.25rem;
-    background: white;
-    cursor: pointer;
-    opacity: 0;
-    animation: fade-in 0.15s ease-out forwards;
-  }
-
-  .rewind-btn:hover {
-    color: #dc2626;
-    border-color: #dc2626;
-  }
-
-  @keyframes fade-in {
-    to { opacity: 1; }
-  }
-
-  .msg.user {
-    align-self: flex-end;
-    text-align: right;
-    background: #f3f4f6;
-    padding: 0.5rem 0.75rem;
-    border-radius: 1rem;
-  }
-
-  .msg.assistant {
-    align-self: flex-start;
-  }
-
-  .thinking {
-    margin-top: 0.5rem;
-    font-size: 0.8rem;
-    color: #9ca3af;
-  }
-
-  .thinking summary {
-    cursor: pointer;
-    font-style: italic;
-  }
-
-  .thinking p {
-    white-space: pre-wrap;
-    max-height: 200px;
-    overflow-y: auto;
-  }
-
-  .tool-use {
-    margin-top: 0.25rem;
-    padding: 0;
-    border: none;
-    background: none;
-  }
-
-  .tool-use summary {
-    list-style: none;
-    cursor: pointer;
-    display: inline-block;
-  }
-
-  .tool-use summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .tool-use .tool-args {
-    padding: 0.4rem 0.6rem;
-    margin-top: 0.25rem;
-    background: #f9fafb;
-    border-radius: 0.25rem;
-    border: 1px solid #e5e7eb;
-  }
-
-  .tool-result {
-    margin-top: 0.25rem;
-    padding: 0.5rem;
-    border-radius: 0.375rem;
-    background: #f5f0ff;
-    border: 1px solid #e4d9fc;
-  }
-
-  .tool-pill {
-    display: inline-block;
-    font-size: 0.75rem;
-    font-family: monospace;
-    padding: 0.2rem 0.6rem;
-    border-radius: 1rem;
-    background: #ede9fe;
-    color: #7c3aed;
-  }
-
-  .tool-args {
-    font-size: 0.8rem;
-    font-style: italic;
-    color: #6b7280;
-    margin: 0.25rem 0 0;
-  }
-
-  .tool-text {
-    font-size: 0.8rem;
-    white-space: pre-wrap;
-    max-height: 200px;
-    overflow-y: auto;
-    color: #374151;
-  }
-
-  .msg.pending {
-    opacity: 0.6;
-  }
-
-  .msg.approval {
-    opacity: 1;
-    border: 2px solid #059669;
-  }
-
-  .msg p {
-    margin: 0.25rem 0 0;
-  }
-
-  /* Markdown prose inside chat bubbles */
-  .markdown :global(h1),
-  .markdown :global(h2),
-  .markdown :global(h3) {
-    margin: 0.5rem 0 0.25rem;
-    font-size: 0.95rem;
-    font-weight: 700;
-  }
-
-  .markdown :global(p) {
-    margin: 0.25rem 0;
-  }
-
-  .markdown :global(ul),
-  .markdown :global(ol) {
-    margin: 0.25rem 0;
-    padding-left: 1.25rem;
-  }
-
-  .markdown :global(code) {
-    font-size: 0.8rem;
-    background: rgba(0, 0, 0, 0.06);
-    padding: 0.1rem 0.3rem;
-    border-radius: 0.2rem;
-  }
-
-  .markdown :global(pre) {
-    margin: 0.5rem 0;
-    padding: 0.5rem;
-    background: rgba(0, 0, 0, 0.06);
-    border-radius: 0.375rem;
-    overflow-x: auto;
-    font-size: 0.8rem;
-  }
-
-  .markdown :global(pre code) {
-    background: none;
-    padding: 0;
-  }
-
-  .markdown :global(blockquote) {
-    margin: 0.25rem 0;
-    padding-left: 0.75rem;
-    border-left: 3px solid rgba(0, 0, 0, 0.15);
-    color: #6b7280;
-  }
-
-  .edit-instruction {
-    width: 100%;
-    box-sizing: border-box;
-    min-height: 3rem;
-    margin-top: 0.5rem;
-    padding: 0.5rem;
-    font-size: 0.85rem;
-    font-family: inherit;
-    border: 1px solid #d1d5db;
-    border-radius: 0.25rem;
-    resize: vertical;
-  }
-
-  .approval-actions {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
-    justify-content: flex-end;
-  }
-
-  .approval-actions .correction-play {
-    margin-right: auto;
-  }
-
-  .approve-btn {
-    font-size: 0.8rem;
-    padding: 0.3rem 1rem;
-    color: #059669;
-    border-color: #059669;
-  }
-
-  .reject-btn {
-    font-size: 0.8rem;
-    padding: 0.3rem 1rem;
-    color: #dc2626;
-    border-color: #dc2626;
-  }
-
+  /* --- Corrections --- */
   .correction-row {
     display: flex;
     align-items: center;
@@ -848,24 +1059,10 @@
     border-bottom: 1px solid #f0f0f0;
   }
 
-  .correction-text {
-    flex: 1;
-    font-size: 0.85rem;
-  }
-
-  .correction-heard {
-    text-decoration: line-through;
-    color: #9ca3af;
-  }
-
-  .correction-arrow {
-    color: #9ca3af;
-    margin: 0 0.25rem;
-  }
-
-  .correction-meant {
-    color: #059669;
-  }
+  .correction-text { flex: 1; font-size: 0.85rem; }
+  .correction-heard { text-decoration: line-through; color: #9ca3af; }
+  .correction-arrow { color: #9ca3af; margin: 0 0.25rem; }
+  .correction-meant { color: #059669; }
 
   .correction-play {
     font-size: 0.7rem;
@@ -885,189 +1082,5 @@
     color: #9ca3af;
     font-size: 0.85rem;
     text-align: center;
-  }
-
-  /* Toast */
-  .toast {
-    position: fixed;
-    top: 1rem;
-    right: 1rem;
-    max-width: 360px;
-    padding: 0.6rem 1rem;
-    background: #fef2f2;
-    color: #991b1b;
-    border: 1px solid #fecaca;
-    border-radius: 0.5rem;
-    font-size: 0.8rem;
-    line-height: 1.4;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-    animation: toast-in 0.2s ease-out;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-    z-index: 200;
-  }
-
-  @keyframes toast-in {
-    from { opacity: 0; transform: translateY(-0.5rem); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  /* Thinking dots */
-  .thinking-dots {
-    display: flex;
-    gap: 0.3rem;
-    margin: 0.25rem 0 0;
-  }
-
-  .thinking-dots span {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #9ca3af;
-    animation: dot-bounce 1.4s ease-in-out infinite;
-  }
-
-  .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
-  .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
-
-  @keyframes dot-bounce {
-    0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-    40% { opacity: 1; transform: scale(1); }
-  }
-
-  /* Input bar */
-  .input-bar {
-    flex-shrink: 0;
-    margin: 0.5rem auto;
-    max-width: 600px;
-    width: 100%;
-    display: flex;
-    align-items: flex-end;
-    gap: 0.5rem;
-    padding: 0.5rem 0.5rem 0.5rem 0.75rem;
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 1.25rem;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-    box-sizing: border-box;
-  }
-
-  .mode-status {
-    flex-shrink: 0;
-    align-self: center;
-    font-size: 0.7rem;
-    color: #059669;
-    border: none;
-    background: none;
-    padding: 0.25rem 0;
-    cursor: pointer;
-  }
-
-  .mode-status:hover {
-    opacity: 0.7;
-  }
-
-  .mode-status.mode-accept {
-    color: #7c3aed;
-  }
-
-  .waveform {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 3px;
-    padding: 0.35rem 0;
-  }
-
-  .wave-bar {
-    width: 3px;
-    height: 20px;
-    border-radius: 1.5px;
-    background: #059669;
-    animation: wave 1s ease-in-out infinite;
-  }
-
-  @keyframes wave {
-    0%, 100% { transform: scaleY(0.15); }
-    50% { transform: scaleY(1); }
-  }
-
-  .input-field {
-    flex: 1;
-    border: none;
-    outline: none;
-    background: transparent;
-    font-family: inherit;
-    font-size: 0.9rem;
-    resize: none;
-    padding: 0.35rem 0;
-    line-height: 1.4;
-    color: #374151;
-  }
-
-  .input-field::placeholder {
-    color: #9ca3af;
-  }
-
-  .input-field:disabled {
-    opacity: 0.6;
-    cursor: default;
-  }
-
-  .mic-btn {
-    position: relative;
-    flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    border: none;
-    background: #e5e7eb;
-    color: #6b7280;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-  }
-
-  .mic-btn:disabled {
-    cursor: default;
-  }
-
-  .mic-btn.connecting {
-    animation: gentle-pulse 1.5s ease-in-out infinite;
-  }
-
-  .mic-btn.connected {
-    background: #059669;
-    color: white;
-  }
-
-  .mic-btn.connected::before,
-  .mic-btn.connected::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: 50%;
-    border: 2px solid #059669;
-    animation: pulse-ring 2s ease-out infinite;
-  }
-
-  .mic-btn.connected::after {
-    animation-delay: 1s;
-  }
-
-  @keyframes pulse-ring {
-    0% { transform: scale(1); opacity: 0.5; }
-    100% { transform: scale(1.8); opacity: 0; }
-  }
-
-  @keyframes gentle-pulse {
-    0%, 100% { opacity: 0.5; }
-    50% { opacity: 1; }
   }
 </style>
