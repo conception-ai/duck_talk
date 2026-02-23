@@ -3,12 +3,57 @@
   import { push } from 'svelte-spa-router';
   import type { ContentBlock, Message } from '../live/types';
 
-  // --- Simulated state ---
+  // --- State ---
   type SimState = 'idle' | 'recording' | 'approval' | 'streaming';
   let simState = $state<SimState>('idle');
   let transcription = $state('');
   let streamingText = $state('');
-  let audioLevels = $state<number[]>([0, 0, 0, 0, 0, 0, 0, 0]);
+
+  // --- Audio-reactive waveform ---
+  const NUM_BARS = 16;
+  let audioLevels = $state<number[]>(new Array(NUM_BARS).fill(0));
+  let micCtx: AudioContext | null = null;
+  let micStream: MediaStream | null = null;
+  let rafId = 0;
+
+  async function startRecording() {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ctx = new AudioContext({ sampleRate: 16000 });
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    micCtx = ctx;
+    micStream = stream;
+
+    const buf = new Float32Array(analyser.fftSize);
+    const segSize = Math.floor(buf.length / NUM_BARS);
+    function tick() {
+      analyser.getFloatTimeDomainData(buf);
+      audioLevels = Array.from({ length: NUM_BARS }, (_, i) => {
+        let sum = 0;
+        for (let j = 0; j < segSize; j++) {
+          const v = buf[i * segSize + j];
+          sum += v * v;
+        }
+        return Math.min(1, Math.sqrt(sum / segSize) * 3);
+      });
+      rafId = requestAnimationFrame(tick);
+    }
+    rafId = requestAnimationFrame(tick);
+    simState = 'recording';
+  }
+
+  function stopRecording() {
+    cancelAnimationFrame(rafId);
+    micStream?.getTracks().forEach((t) => t.stop());
+    void micCtx?.close();
+    micCtx = null;
+    micStream = null;
+    audioLevels = new Array(NUM_BARS).fill(0);
+  }
+
+  // Simulated text intervals (transcription + streaming — not audio)
   let simInterval: ReturnType<typeof setInterval> | undefined;
 
   const MOCK_MESSAGES: Message[] = [
@@ -103,7 +148,7 @@
 
   let messages = $state<Message[]>([...MOCK_MESSAGES]);
 
-  // --- Simulation helpers ---
+  // --- Simulation helpers (text only — audio is real) ---
   function clearSim() {
     clearInterval(simInterval);
     simInterval = undefined;
@@ -111,11 +156,11 @@
 
   function setState(s: SimState) {
     clearSim();
-    simState = s;
+    stopRecording();
     transcription = '';
     streamingText = '';
-    audioLevels = [0, 0, 0, 0, 0, 0, 0, 0];
     messages = [...MOCK_MESSAGES];
+    simState = s;
 
     if (s === 'recording') {
       const words = 'Fix the authentication bug in the login flow please'.split(' ');
@@ -125,13 +170,13 @@
           transcription += (wi > 0 ? ' ' : '') + words[wi];
           wi++;
         }
-        // Simulate audio levels
-        audioLevels = audioLevels.map(() => Math.random() * 0.8 + 0.1);
       }, 300);
+      startRecording();
     }
 
     if (s === 'approval') {
       transcription = 'Fix the authentication bug in the login flow please';
+      startRecording();
     }
 
     if (s === 'streaming') {
@@ -246,10 +291,10 @@
       {#if simState === 'recording' || simState === 'approval'}
         <div class="waveform">
           {#each audioLevels as level}
-            <span class="bar" style="height: {4 + level * 20}px"></span>
+            <span class="bar" style="height: {4 + level * 24}px"></span>
           {/each}
         </div>
-        <button class="mic-btn active" onclick={() => setState('idle')}>
+        <button class="mic-btn active" onclick={() => { stopRecording(); simState = 'idle'; }}>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
             <rect x="6" y="6" width="12" height="12" rx="2" />
           </svg>
@@ -259,7 +304,7 @@
         <button
           class="mic-btn"
           class:pulsing={simState === 'streaming'}
-          onclick={() => setState('recording')}
+          onclick={() => startRecording()}
         >
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
             <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z" />
