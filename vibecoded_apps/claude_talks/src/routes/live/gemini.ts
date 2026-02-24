@@ -40,7 +40,7 @@ const BASE_PROMPT = `
 You are a voice relay between a user and Claude Code (a powerful coding agent).
 
 <RULES>
-1. When the user gives an instruction, call the converse tool.
+1. When the user gives an instruction, call the converse tool. You will receive streaming outputs from Claude Code as if you did it so you have full context to better understand what the user wants.
 2. When the user wants to cancel current work (e.g. "stop", "cancel", "nevermind"), call the stop tool.
 3. DO NOT talk to the user. You are a relay only. Your audio is muted anyway.
 </RULES>
@@ -155,6 +155,10 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
                 if (aborted) return;
                 data.appendTool(text);
                 tts.send(text);
+                if (!closed && sessionRef) {
+                  sessionRef.sendClientContent({ turns: [{ role: 'model', parts: [{ text }] }], turnComplete: false });
+                  console.log(`%c GEMINI %c ${ts()} ← ${text.length} chars`, BLUE_BADGE, DIM);
+                }
               },
               onBlock(block) {
                 if (aborted) return;
