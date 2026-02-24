@@ -4,8 +4,8 @@
  * Listens for accept/reject keywords, triggers callbacks, then stops.
  */
 
-const ACCEPT_WORDS = ['accept', 'yes', 'go ahead', 'go', 'do it', 'ok', 'okay', 'confirm', 'sure'];
-const REJECT_WORDS = ['reject', 'no', 'cancel', 'stop', 'nevermind', 'never mind'];
+const ACCEPT_WORDS = new Set(['accept', 'yes']);
+const REJECT_WORDS = new Set(['reject', 'no']);
 
 // Chrome exposes this under a vendor prefix
 const SpeechRecognition =
@@ -36,10 +36,11 @@ export function startVoiceApproval(
     const transcript = result[0].transcript.trim().toLowerCase();
     console.log(`[voice-approval] heard: "${transcript}"`);
 
-    if (ACCEPT_WORDS.some((w) => transcript.includes(w))) {
+    const words = transcript.split(/\s+/);
+    if (words.some((w) => ACCEPT_WORDS.has(w))) {
       stop();
       onAccept();
-    } else if (REJECT_WORDS.some((w) => transcript.includes(w))) {
+    } else if (words.some((w) => REJECT_WORDS.has(w))) {
       stop();
       onReject();
     }
