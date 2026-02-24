@@ -53,16 +53,16 @@ Batch read them all in a single read. You must read context in a single turnÒ
 
 **Production → Prototype (fast start):**
 1. Create a new route under `src/routes/` (e.g. `new-ui/`)
-2. Import shared types from `lib/chat-types.ts` and helpers from `lib/message-helpers.ts`
-3. Create a `scenarios.ts` with mock data in `ScenarioState` shape: `{ messages: Message[], status: Status, pendingTool, pendingApproval, pendingInput, toast }`
-4. Build `+page.svelte` using `ScenarioSelector` from `lib/dev/ScenarioSelector.svelte` — top-right dropdown drives all UI state via `$derived`
+2. Import shared types e.g. `lib/chat-types.ts` and helpers e.g. `lib/message-helpers.ts`
+3. Create a `scenarios.ts` with mock data in `ScenarioState` shape, e.g.: `{ messages: Message[], status: Status, pendingTool, pendingApproval, pendingInput, toast }`
+4. Build `+page.svelte` using `ScenarioSelector` from `lib/dev/ScenarioSelector.svelte` — bottom-right dropdown drives all UI state via `$derived`
 5. Register the route in `App.svelte`
 6. No backend, no stores, no audio needed — iterate at `http://localhost:5173/#/your-route`
 
 **Prototype → Production (propagate):**
 1. Diff `new-ui/+page.svelte` vs `live/+page.svelte` — focus on markup and CSS changes
 2. Template bindings carry over directly because both use the same `lib/message-helpers` and `lib/chat-types`
-3. If types changed during prototyping, reconcile `lib/chat-types.ts` and verify `live/types.ts` re-exports still work
+3. If types changed during prototyping, reconcile them and verify re-exports still work
 4. Run `npm run check` to catch breakage
 
 **Key pattern — scenario-driven rendering (Svelte 5):**
@@ -73,7 +73,6 @@ let status = $derived(scenario.state.status);
 let inputText = $state('');                        // local interactive state
 ```
 
-**Reference layout (claude.ai pattern):** Single scroll container with messages (`flex: 1`) + input (`position: sticky; bottom: 0`). Buffer zone between messages and input is emergent (flex-1 stretching), not an explicit spacer. See `new-ui/+page.svelte` for implementation.
 
 ## Gotchas
 
