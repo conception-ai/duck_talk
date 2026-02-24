@@ -35,7 +35,7 @@ Each sound maps to exactly one system state transition. No sound exists for aest
 Productivity tool, not a game. Sounds should be:
 - **Short** — under 200ms for events, looping for states
 - **Soft** — low amplitude, won't startle
-- **Timbrally simple** — sine waves and filtered noise, not chords or melodies
+- **Timbrally simple** — sine waves, not chords or melodies
 - **Pitch-coded** — rising = positive/ready, falling = negative/stopped, flat = neutral/ongoing
 
 Emotional neutrality is a feature. The tap that says "heard you" should feel the same whether the user just asked to delete a database or rename a variable.
@@ -57,16 +57,14 @@ Between speech end and Claude's voice, there can be 3-12 seconds of silence. In 
 
 ## The vocabulary
 
-Five sounds. Each resolves one gap in the auditory experience.
+Two sounds. Everything else is implicit in the conversation flow.
 
 ### Taxonomy
 
-Sounds fall into two categories:
+**Event** — punctual, fire-and-forget. Marks a discrete state transition.
+- Tap
 
-**Events** — punctual, fire-and-forget. Mark a discrete state transition.
-- Tap, Error, Ready, Stopped
-
-**States** — continuous, looping. Indicate an ongoing condition.
+**State** — continuous, looping. Indicates an ongoing condition.
 - Pulse (thinking)
 
 The only voice in the system is Gemini TTS reading Claude's text. It is not "our" sound — it's the content delivery mechanism. We control when it's allowed through (the gate), but we don't design it.
@@ -75,6 +73,9 @@ The only voice in the system is Gemini TTS reading Claude's text. It is not "our
 
 | Candidate | Why excluded |
 |-----------|-------------|
+| Error sound | Pulse stopping IS the error signal. The absence of resolution is unambiguous. Visual UI handles the detail. |
+| Ready chime | The user initiated the connection — they're watching. Visual state suffices. |
+| Stopped chime | Silence after voice = done. Falling pitch adds no information. |
 | Approval prompt | User chose review mode — they're already watching. Visual UI suffices. |
 | Interrupt ack | Audio stopping IS the feedback. Sound on silence is redundant. |
 | "Done" chime | Silence after voice = done. Adding a chime adds no information. |
@@ -93,9 +94,9 @@ The exclusion list is as important as the inclusion list. Every sound you don't 
 
 **Resolves**: the 0.5-1.5s gap between speech end and system acknowledgment. Without it, the user doesn't know if the system heard them.
 
-**Character**: damped sine dropping 700→400Hz over 80ms. 3ms soft attack. Sounds like tapping a wooden block — neutral, percussive, no emotional valence.
+**Character**: Hann-windowed sine at ~690Hz. 3ms of signal in an 80ms frame. The envelope is `sin²(πt/dur)` — zero derivative at both endpoints, so the sound appears and dissolves with no perceptible attack or release. Gentle frequency sweep from 710→670Hz (barely perceptible — the ear hears a single soft pulse, not a descending tone). Peak amplitude 0.22.
 
-**File**: `public/sounds/tap.wav` (7KB)
+**Implementation**: `src/routes/live/sounds/tap.ts` — pre-rendered AudioBuffer, no oscillators.
 
 **Timing**: plays immediately on `converse` tool call, before any async work begins.
 
@@ -105,43 +106,51 @@ The exclusion list is as important as the inclusion list. Every sound you don't 
 
 **Resolves**: the 2-10s gap between tap and Claude's voice. Without it, silence after a tap feels like the system crashed.
 
-**Character**: 80Hz sine with gentle amplitude wobble (swell and fade, 1 cycle/sec). Very soft — present enough to say "alive," quiet enough to disappear when voice starts. Audio equivalent of a loading spinner.
+**Character**: 80Hz sine with Hann-shaped breathing — amplitude swells and recedes once per second following `sin²()`. Amplitude range: 0.02–0.05 (40% floor, 60% swell depth). Quiet enough to forget about, present enough that its absence would be noticed.
 
-**File**: `public/sounds/pulse.wav` (265KB, 3s demo — loops in production)
+**Implementation**: `src/routes/live/sounds/pulse.ts` — pre-rendered 1s AudioBuffer, looped.
 
 **Timing**: starts immediately after tap. Hard-stops (no fade) the instant the first Claude SSE chunk arrives. The voice beginning IS the resolution — any transition sound would delay it.
 
-### 3. ERROR
+---
 
-**State transition**: Claude request failed, connection dropped, timeout
+## The Hann window: why it works
 
-**Resolves**: without it, the pulse either plays forever or stops silently. Both are worse than explicit failure notification.
+The single most important discovery in this sound design: the envelope function matters more than frequency, synthesis method, or harmonic content.
 
-**Character**: two soft sine tones at 420Hz then 320Hz, each ~150ms with smooth rise-fall envelope. Clearly "something went wrong" without being alarming.
+`sin²(πt/dur)` — the Hann window — has a unique property: **zero derivative at both endpoints.** The amplitude starts at zero with zero slope and ends at zero with zero slope. There is no attack transient, no release click, no mathematical edge for the ear to catch.
 
-**File**: `public/sounds/error.wav` (31KB)
+This is why the tap doesn't sound "gadgetty" despite being a raw sine wave. And why the pulse breathes rather than oscillates despite being a raw sine wave. The Hann window makes the sound appear and dissolve instead of starting and stopping.
 
-**Timing**: plays when error is detected. Replaces both the pulse (if active) and any expected voice.
+### What was tried and rejected
 
-### 4a. READY
+Every alternative envelope produced sounds that felt synthetic, mechanical, or attention-seeking:
 
-**State transition**: Gemini connection established, mic is live
+| Envelope | Problem |
+|----------|---------|
+| Linear ramp attack + exponential decay | The junction between attack and decay is a discontinuity. The ear catches it as "electronic." |
+| Gaussian bump | Smooth, but doesn't reach zero at endpoints — needs hard truncation, which adds a click. |
+| ADSR (attack/decay/sustain/release) | Four parameters to tune, each a potential source of artificiality. Over-designed. |
 
-**Resolves**: confirms the async connection succeeded and the user can start speaking. Without it, the user taps the mic orb and waits in uncertainty.
+### What was tried and rejected (synthesis)
 
-**Character**: sine sweep 350→550Hz over 200ms with smooth bell envelope. Rising = positive, ready, open.
+Attempts to make sounds "warmer" or "more organic" by increasing complexity consistently made them worse:
 
-**File**: `public/sounds/ready.wav` (18KB)
+| Method | Result |
+|--------|--------|
+| Additive sines (stacking harmonics) | Each harmonic added was a decision the ear could detect as designed. More harmonics = more synthetic. |
+| Filtered noise (bandpass, pink) | Organic texture, but impossible to make discreet enough. Noise draws attention. |
+| Karplus-Strong (physical modeling) | Models a plucked string. Sounds like a guitar — wrong physical object. |
+| FM synthesis (carrier:modulator) | Rich timbres, but still bolted onto the wrong envelope. The envelope was always the real problem. |
+| Detuned sine clusters | Beating/shimmer draws attention. The variation becomes the thing you listen to. |
 
-### 4b. STOPPED
+The lesson: **a simple sine with the right envelope beats a complex timbre with the wrong one.** The ear forgives spectral simplicity but punishes envelope artificiality.
 
-**State transition**: session ended
+### Parameters: gentle over dramatic
 
-**Resolves**: confirms the session actually closed (especially important if the user tapped stop while Claude was speaking).
+The original spec called for a 700→400Hz sweep. The actual recording that sounded right sweeps 710→670Hz — a 40Hz range, barely perceptible. Every attempt with dramatic parameter changes (1800→900Hz pitch drops, fast exponential decays, wide frequency sweeps) sounded "gadgetty" because **drama demands attention, and attention is the opposite of what a utility sound should do.**
 
-**Character**: sine sweep 550→350Hz over 200ms. Mirror of ready. Falling = closed, done.
-
-**File**: `public/sounds/stopped.wav` (18KB)
+The sound should be felt, not noticed.
 
 ---
 
@@ -164,7 +173,7 @@ Done ─────────────────────────
 ```
 Tool call ───────────────────── TAP
 Claude TTFT ─────────────────── PULSE ... PULSE
-Error ───────────────────────── ERROR (pulse stops)
+Error ───────────────────────── pulse stops (= something went wrong)
 ```
 
 ### User interrupts Claude
@@ -178,9 +187,9 @@ User speaks ─────────────────── voice stop
 
 ```
 User taps mic orb ───────────── (visual: connecting state)
-Connection established ──────── READY
+Connection established ──────── (visual: ready state)
 ... conversation ...
-User taps stop ──────────────── STOPPED
+User taps stop ──────────────── silence (= done)
 ```
 
 ### Review/correct mode
