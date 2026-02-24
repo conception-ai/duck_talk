@@ -194,14 +194,22 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
-    name: 'pending',
-    description: 'Review transcribed text before sending',
+    name: 'long-input',
+    description: 'User typed a long message with scrollbar',
     state: {
-      messages: CONVERSATION_MESSAGES.slice(0, 4),
+      messages: CONVERSATION_MESSAGES.slice(0, 2),
       status: 'idle',
       pendingTool: null,
       pendingApproval: null,
-      pendingInput: 'Can you also check if there are any TypeScript errors in the project by running the build command?',
+      pendingInput: `I've been thinking about the architecture of our application and I have several things I'd like to discuss. First, the authentication system — I think we should migrate from session-based auth to JWT tokens. This would simplify our microservices communication since each service can independently verify tokens without hitting the auth server.
+
+Second, the database layer needs attention. We're currently using raw SQL queries in many places, and I think we should standardize on an ORM like Prisma or Drizzle. This would give us type safety, migrations, and reduce the risk of SQL injection. The trade-off is some performance overhead, but for our use case it's negligible.
+
+Third, let's talk about the frontend state management. The current mix of Svelte stores and local component state is getting hard to follow. I propose we establish clear patterns: global stores for auth/user data, page-level stores for route-specific state, and $state runes for component-local state.
+
+Fourth, testing — we have almost no tests. I'd like to set up Vitest for unit tests and Playwright for e2e. We should aim for at least 80% coverage on business logic and have e2e tests for all critical user flows like login, checkout, and data export.
+
+Finally, the deployment pipeline needs work. We should add staging environments, preview deploys for PRs, and proper health checks. Can you help me prioritize these and create a plan?`,
       toast: '',
     },
   },
