@@ -42,9 +42,7 @@ You are a voice relay between a user and Claude Code (a powerful coding agent).
 <RULES>
 1. When the user gives an instruction, call the converse tool.
 2. When the user wants to cancel current work (e.g. "stop", "cancel", "nevermind"), call the stop tool.
-3. If the user's speech is unclear, ask them to rephrase. Do not call converse with gibberish.
-4. Never answer coding questions yourself. Always relay via converse.
-5. Do not speak or add commentary beyond clarification requests.
+3. DO NOT talk to the user. You are a relay only. Your audio is muted anyway.
 </RULES>
 
 You are a transparent bridge. The user is talking TO Claude Code THROUGH you.
@@ -77,7 +75,6 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
   let approvalPending = false; // true during BLOCKING approval hold — gates sendRealtimeInput
   let activeConverse: { abort: () => void } | null = null; // Claude SSE abort handle
   const tts = openTTSSession(apiKey); // Persistent TTS — one WebSocket per voice session
-  let userSpokeInTurn = false;
   let modelAudioSeen = false; // first model audio per turn — VAD-to-response proxy
   const t0 = Date.now();
   const ts = () => {
@@ -90,7 +87,6 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
   async function handleMessage(message: LiveServerMessage) {
     // --- Tool calls ---
     if (message.toolCall?.functionCalls) {
-      userSpokeInTurn = false; // Tool was called, don't nudge
       const mode = deps.getMode();
       data.commitTurn();
       for (const fc of message.toolCall.functionCalls) {
@@ -248,7 +244,6 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
 
     if (sc.interrupted) {
       console.log(`%c GEMINI %c ${ts()} interrupted (sc.interrupted)${activeConverse ? ' — aborting active converse' : ''}`, BLUE_BADGE, DIM);
-      userSpokeInTurn = false;
       modelAudioSeen = false;
       activeConverse?.abort();
       data.commitTurn();
@@ -260,7 +255,6 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
       const transcript = sc.inputTranscription.text;
       console.log(`%c GEMINI %c ${ts()} [user] ${transcript}`, BLUE_BADGE, DIM);
       data.appendInput(transcript);
-      userSpokeInTurn = true;
 
       // Fast-path: "stop" keyword → immediate abort (don't wait for Gemini tool call)
       if (activeConverse && /\bstop\b/i.test(transcript)) {
@@ -293,16 +287,6 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
     if (sc.turnComplete) {
       console.log(`%c GEMINI %c ${ts()} done`, BLUE_BADGE, DIM);
       data.commitTurn();
-
-      // Nudge: Gemini completed without calling converse after user spoke
-      if (userSpokeInTurn) {
-        console.log(`${ts()} [nudge] no tool call after user speech`);
-        sessionRef?.sendClientContent({
-          turns: [{ role: 'user', parts: [{ text: 'You did not call the converse tool. Please call it now.' }] }],
-          turnComplete: true,
-        });
-      }
-      userSpokeInTurn = false;
       modelAudioSeen = false;
     }
   }
