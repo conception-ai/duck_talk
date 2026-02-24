@@ -40,9 +40,11 @@ const BASE_PROMPT = `
 You are a voice relay between a user and Claude Code (a powerful coding agent).
 
 <RULES>
-1. When the user asks a question or gives an instruction, ALWAYS call the converse tool, and NEVER answer yourself.
-2. Do not speak or add commentary. Just call the converse tool.
-3. When user says "STOP" you just stop and not answer anything.
+1. When the user gives an instruction, call the converse tool.
+2. When the user wants to cancel current work (e.g. "stop", "cancel", "nevermind"), call the stop tool.
+3. If the user's speech is unclear, ask them to rephrase. Do not call converse with gibberish.
+4. Never answer coding questions yourself. Always relay via converse.
+5. Do not speak or add commentary beyond clarification requests.
 </RULES>
 
 You are a transparent bridge. The user is talking TO Claude Code THROUGH you.
@@ -207,6 +209,16 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
           continue;
         }
 
+        if (fc.name === 'stop') {
+          console.log(`%c GEMINI %c ${ts()} ⏹ STOP (tool) — Gemini called stop tool, aborting active converse`, BLUE_BADGE, DIM);
+          activeConverse?.abort();
+          data.finishTool();
+          sessionRef?.sendToolResponse({
+            functionResponses: [{ id: fc.id, name: 'stop', response: { result: 'stopped' } }],
+          });
+          continue;
+        }
+
         const result = await handleToolCall(fc.name!, fc.args ?? {});
         console.log(`${ts()} tool result:`, result);
         data.appendTool(JSON.stringify(result));
@@ -243,16 +255,18 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
       return;
     }
 
-    // User speech — always pass through, and abort any active converse
+    // User speech — accumulate, let Gemini decide via tool calls
     if (sc.inputTranscription?.text) {
-      if (activeConverse) {
-        console.log(`%c GEMINI %c ${ts()} user speech interrupted active converse (inputTranscription): "${sc.inputTranscription.text}"`, BLUE_BADGE, DIM);
-      } else {
-        console.log(`${ts()} [user] ${sc.inputTranscription.text}`);
-      }
-      activeConverse?.abort();
-      data.appendInput(sc.inputTranscription.text);
+      const transcript = sc.inputTranscription.text;
+      console.log(`%c GEMINI %c ${ts()} [user] ${transcript}`, BLUE_BADGE, DIM);
+      data.appendInput(transcript);
       userSpokeInTurn = true;
+
+      // Fast-path: "stop" keyword → immediate abort (don't wait for Gemini tool call)
+      if (activeConverse && /\bstop\b/i.test(transcript)) {
+        console.log(`%c GEMINI %c ${ts()} ⏹ STOP (fast-path) — keyword detected in "${transcript}", aborting active converse`, BLUE_BADGE, DIM);
+        activeConverse.abort();
+      }
     }
 
     // Main session audio playback is ignored (TTS session handles playback)

@@ -39,7 +39,6 @@ export function createDataStore(deps: DataStoreDeps) {
   let messages = $state<Message[]>([]);
   let voiceLog = $state<VoiceEvent[]>([]);
   let pendingInput = $state('');
-  let pendingOutput = $state('');
   let pendingTool = $state<PendingTool | null>(null);
   let awaitingToolDone = false; // not reactive — internal flag only
   let pendingApproval = $state<PendingApproval | null>(null);
@@ -58,10 +57,6 @@ export function createDataStore(deps: DataStoreDeps) {
 
   function appendInput(text: string) {
     pendingInput += text;
-  }
-
-  function appendOutput(text: string) {
-    pendingOutput += text;
   }
 
   function startTool(name: string, args: Record<string, unknown>) {
@@ -122,43 +117,19 @@ export function createDataStore(deps: DataStoreDeps) {
   }
 
   function doCommitAssistant() {
-    const text = pendingOutput.trim();
     const tool = pendingTool;
+    if (!tool) return;
 
-    if (!text && !tool) {
-      pendingOutput = '';
-      return;
+    // User message already pushed by commitUserMessage() at converse start
+    if (tool.blocks.length > 0) {
+      messages.push({ role: 'assistant', content: tool.blocks });
+    } else if (tool.text) {
+      messages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: tool.text }],
+      });
     }
 
-    // Gemini speech (without tool) → voiceLog
-    if (text && !tool) {
-      const last = voiceLog.at(-1);
-      if (last?.role === 'gemini') {
-        last.text = (last.text + '\n' + text).trim();
-      } else {
-        voiceLog.push({ role: 'gemini', text, ts: Date.now() });
-      }
-    }
-
-    // Converse tool result → messages[] (CC conversation)
-    if (tool) {
-      // Gemini speech alongside tool → voiceLog
-      if (text) {
-        voiceLog.push({ role: 'gemini', text, ts: Date.now() });
-      }
-      // User message already pushed by commitUserMessage() at converse start
-      // Claude's response
-      if (tool.blocks.length > 0) {
-        messages.push({ role: 'assistant', content: tool.blocks });
-      } else if (tool.text) {
-        messages.push({
-          role: 'assistant',
-          content: [{ type: 'text', text: tool.text }],
-        });
-      }
-    }
-
-    pendingOutput = '';
     pendingTool = null;
   }
 
@@ -210,7 +181,6 @@ export function createDataStore(deps: DataStoreDeps) {
   async function editMessage(messageIndex: number) {
     api.abort();
     pendingTool = null;
-    pendingOutput = '';
     pendingApproval = null;
     pendingCancel?.();
     pendingCancel = null;
@@ -232,7 +202,6 @@ export function createDataStore(deps: DataStoreDeps) {
 
   const dataMethods = {
     appendInput,
-    appendOutput,
     commitUserMessage,
     startTool,
     appendTool,
@@ -296,7 +265,6 @@ export function createDataStore(deps: DataStoreDeps) {
     get messages() { return messages; },
     get voiceLog() { return voiceLog; },
     get pendingInput() { return pendingInput; },
-    get pendingOutput() { return pendingOutput; },
     get pendingTool() { return pendingTool; },
     get pendingApproval() { return pendingApproval; },
     get claudeSessionId() { return api.sessionId; },

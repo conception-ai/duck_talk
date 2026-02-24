@@ -23,7 +23,6 @@ import type { ContentBlock, PendingApproval, Status } from '../../lib/chat-types
 
 export interface DataStoreMethods {
   appendInput(text: string): void;
-  appendOutput(text: string): void;
   startTool(name: string, args: Record<string, unknown>): void;
   appendTool(text: string): void;
   appendBlock(block: ContentBlock): void;

@@ -17,6 +17,11 @@ export const TOOLS: Tool[] = [
           required: ['instruction'],
         },
       },
+      {
+        name: 'stop',
+        description: 'Stop the current Claude Code operation. Use when the user says stop, cancel, nevermind, or wants to abort current work.',
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
     ],
   },
 ];
