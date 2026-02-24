@@ -1,55 +1,73 @@
 /**
- * Voice-based approval using the browser's native SpeechRecognition API.
- * Activated during BLOCKING approval holds when Gemini is frozen.
- * Listens for accept/reject keywords, triggers callbacks, then stops.
+ * Browser-native keyword listener using SpeechRecognition.
+ * Matches individual words in speech against a keyword→callback map.
+ * Fires the first matching callback, then auto-stops.
+ *
+ * Used for:
+ * - Approval holds: accept/reject keywords while Gemini is frozen
+ * - Stop detection: stop/cancel keywords while Claude is streaming
  */
 
-const ACCEPT_WORDS = new Set(['accept', 'yes']);
-const REJECT_WORDS = new Set(['reject', 'no']);
+// ── Keyword sets ──
 
-export function startVoiceApproval(
-  onAccept: () => void,
-  onReject: () => void,
+export const ACCEPT_WORDS = ['accept', 'yes'] as const;
+export const REJECT_WORDS = ['reject', 'no'] as const;
+export const STOP_WORDS = ['stop', 'cancel'] as const;
+
+// ── Listener ──
+
+interface KeywordListenerOptions {
+  tag?: string;
+  lang?: string;
+}
+
+/**
+ * Start listening for keywords via webkitSpeechRecognition.
+ * Returns a stop() handle, or null if SpeechRecognition is unavailable.
+ */
+export function startKeywordListener(
+  keywords: Record<string, () => void>,
+  { tag = 'keyword', lang = 'en-US' }: KeywordListenerOptions = {},
 ): (() => void) | null {
   if (!webkitSpeechRecognition) {
-    console.warn('[voice-approval] SpeechRecognition not available');
+    console.warn(`[${tag}] SpeechRecognition not available`);
     return null;
   }
 
+  const map = new Map(Object.entries(keywords));
   const recognition = new webkitSpeechRecognition();
   recognition.continuous = true;
   recognition.interimResults = false;
-  recognition.lang = 'en-US';
+  recognition.lang = lang;
 
   let stopped = false;
 
   recognition.onresult = (event) => {
-    // Check only the latest result
     const result = event.results[event.results.length - 1];
     if (!result?.isFinal) return;
 
     const transcript = result[0].transcript.trim().toLowerCase();
-    console.log(`[voice-approval] heard: "${transcript}"`);
+    console.log(`[${tag}] heard: "${transcript}"`);
 
-    const words = transcript.split(/\s+/);
-    if (words.some((w) => ACCEPT_WORDS.has(w))) {
-      stop();
-      onAccept();
-    } else if (words.some((w) => REJECT_WORDS.has(w))) {
-      stop();
-      onReject();
+    for (const w of transcript.split(/\s+/)) {
+      const handler = map.get(w);
+      if (handler) {
+        stop();
+        handler();
+        return;
+      }
     }
   };
 
   recognition.onerror = (event) => {
     if (event.error === 'not-allowed') {
-      console.warn('[voice-approval] mic permission denied — stopping');
+      console.warn(`[${tag}] mic permission denied — stopping`);
       stop();
       return;
     }
     // 'no-speech' and 'aborted' are expected during normal operation
     if (event.error !== 'no-speech' && event.error !== 'aborted') {
-      console.warn(`[voice-approval] error: ${event.error}`);
+      console.warn(`[${tag}] error: ${event.error}`);
     }
   };
 
@@ -67,11 +85,26 @@ export function startVoiceApproval(
 
   try {
     recognition.start();
-    console.log('[voice-approval] listening');
+    console.log(`[${tag}] listening`);
   } catch {
-    console.warn('[voice-approval] failed to start');
+    console.warn(`[${tag}] failed to start`);
     return null;
   }
 
   return stop;
+}
+
+/**
+ * Voice-based approval — listens for accept/reject keywords.
+ * Thin wrapper over startKeywordListener.
+ */
+export function startVoiceApproval(
+  onAccept: () => void,
+  onReject: () => void,
+  lang?: string,
+): (() => void) | null {
+  const keywords: Record<string, () => void> = {};
+  for (const w of ACCEPT_WORDS) keywords[w] = onAccept;
+  for (const w of REJECT_WORDS) keywords[w] = onReject;
+  return startKeywordListener(keywords, { tag: 'voice-approval', lang });
 }
