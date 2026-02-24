@@ -1,56 +1,22 @@
 /**
- * Shared types and port interfaces for the live session.
- * No runtime code — everything here is a type or interface.
+ * Live session types.
+ * Re-exports render types from lib, defines port interfaces locally.
  */
 
-// --- Domain types ---
+// --- Re-export render types (shared with other routes) ---
 
-export interface PendingTool {
-  name: string;
-  args: Record<string, unknown>;
-  text: string;
-  blocks: ContentBlock[];
-  streaming: boolean;
-}
+export type {
+  ContentBlock,
+  Correction,
+  InteractionMode,
+  Message,
+  PendingApproval,
+  PendingTool,
+  Status,
+  VoiceEvent,
+} from '../../lib/chat-types';
 
-export type Status = 'idle' | 'connecting' | 'connected';
-
-// --- CC message types (1:1 with models.py) ---
-
-export type ContentBlock =
-  | { type: 'text'; text: string }
-  | { type: 'thinking'; thinking: string }
-  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: string }
-  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
-
-export interface Message {
-  uuid?: string;
-  role: 'user' | 'assistant';
-  content: string | ContentBlock[];
-}
-
-export interface VoiceEvent {
-  role: 'user' | 'gemini';
-  text: string;
-  ts: number;
-}
-
-// --- Corrections ---
-
-export interface Correction {
-  id: string;
-  original: string;
-  corrected: string;
-}
-
-// --- Interaction mode ---
-
-export type InteractionMode = 'direct' | 'review';
-
-export interface PendingApproval {
-  instruction: string;
-}
+import type { ContentBlock, PendingApproval, Status } from '../../lib/chat-types';
 
 // --- Port: Data store mutations ---
 // Plain interface so gemini.ts stays a regular .ts file (no rune imports).
