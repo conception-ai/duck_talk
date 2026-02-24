@@ -29,7 +29,7 @@ import {
 } from '@google/genai';
 import { TOOLS, handleToolCall } from './tools';
 import { openTTSSession } from './tts-session';
-import { startVoiceApproval } from './voice-approval';
+import { STOP_WORDS, startKeywordListener, startVoiceApproval } from './voice-approval';
 import type { ConverseApi, DataStoreMethods, InteractionMode, LiveBackend } from './types';
 
 // --- Log styles ---
@@ -123,16 +123,22 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
 
             let aborted = false;
             let claudeDone = false;
+            let stopKeywords: (() => void) | null = null;
 
             const abort = () => {
               if (aborted) return;
               aborted = true;
               converseApi.abort();
               tts.interrupt();
+              stopKeywords?.();
               if (!claudeDone) data.finishTool();
               activeConverse = null;
             };
             activeConverse = { abort };
+
+            const stopMap: Record<string, () => void> = {};
+            for (const w of STOP_WORDS) stopMap[w] = () => abort();
+            stopKeywords = startKeywordListener(stopMap, { tag: 'stop' });
 
             converseApi.stream(approvedInstruction, {
               onChunk(text) {
@@ -255,12 +261,6 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
       const transcript = sc.inputTranscription.text;
       console.log(`%c GEMINI %c ${ts()} [user] ${transcript}`, BLUE_BADGE, DIM);
       data.appendInput(transcript);
-
-      // Fast-path: "stop" keyword → immediate abort (don't wait for Gemini tool call)
-      if (activeConverse && /\bstop\b/i.test(transcript)) {
-        console.log(`%c GEMINI %c ${ts()} ⏹ STOP (fast-path) — keyword detected in "${transcript}", aborting active converse`, BLUE_BADGE, DIM);
-        activeConverse.abort();
-      }
     }
 
     // Main session audio playback is ignored (TTS session handles playback)
