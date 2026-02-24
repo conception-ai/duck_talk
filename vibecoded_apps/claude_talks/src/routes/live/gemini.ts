@@ -92,6 +92,16 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
       for (const fc of message.toolCall.functionCalls) {
         console.log(`%c GEMINI %c ${ts()} tool: ${fc.name}`, BLUE_BADGE, DIM, fc.args);
 
+        // Stop is pure control flow — no pendingTool needed
+        if (fc.name === 'stop') {
+          console.log(`%c GEMINI %c ${ts()} ⏹ STOP (tool) — aborting active converse`, BLUE_BADGE, DIM);
+          activeConverse?.abort();
+          sessionRef?.sendToolResponse({
+            functionResponses: [{ id: fc.id, name: 'stop', response: { result: 'stopped' } }],
+          });
+          continue;
+        }
+
         data.startTool(fc.name!, fc.args ?? {});
 
         if (fc.name === 'converse') {
@@ -208,16 +218,6 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
             const stopReadback = deps.readbackInstruction(instruction);
             holdWithVoice({ instruction }, stopReadback);
           }
-          continue;
-        }
-
-        if (fc.name === 'stop') {
-          console.log(`%c GEMINI %c ${ts()} ⏹ STOP (tool) — Gemini called stop tool, aborting active converse`, BLUE_BADGE, DIM);
-          activeConverse?.abort();
-          data.finishTool();
-          sessionRef?.sendToolResponse({
-            functionResponses: [{ id: fc.id, name: 'stop', response: { result: 'stopped' } }],
-          });
           continue;
         }
 
