@@ -157,13 +157,13 @@ export const SCENARIOS: Scenario[] = [
       status: 'connected',
       pendingTool: {
         name: 'converse',
-        args: { instruction: 'Refactor the authentication module to use JWT tokens instead of session cookies' },
+        args: { instruction: 'Can you also check if there are any TypeScript errors in the project by running the build command?' },
         text: '',
         blocks: [],
         streaming: false,
       },
       pendingApproval: {
-        instruction: 'Refactor the authentication module to use JWT tokens instead of session cookies',
+        instruction: 'Can you also check if there are any TypeScript errors in the project by running the build command?',
       },
       pendingInput: '',
       toast: '',
