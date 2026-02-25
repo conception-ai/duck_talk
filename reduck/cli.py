@@ -70,7 +70,7 @@ def main() -> None:
 
     import uvicorn
 
-    uvicorn.run("server.server:app", host=args.host, port=args.port)
+    uvicorn.run("reduck.server:app", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

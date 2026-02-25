@@ -9,9 +9,11 @@ Batch read them all in a single read. You must read context in a single turnÒ
 
 | File | Purpose |
 |------|---------|
-| @models.py | Session JSONL schema, `fork_session()` (rewind by creating truncated JSONL), `Conversation` loader |
-| @claude_client.py | Claude Code SDK wrapper (isolated subprocess). `ClaudeConfig` dataclass (`REGULAR_CONFIG` → `~/.claude/`, `ISOLATED_CONFIG` → `~/.claude-sdk/`) — single source of truth for session paths. Server imports `ISOLATED_CONFIG` |
-| @api/server.py | FastAPI backend — SSE streaming, `GET /api/sessions/{id}/messages` (faithful content blocks), `POST /api/converse` (forks session on `leaf_uuid` for rewind) |
+| @reduck/models.py | Session JSONL schema, `fork_session()` (rewind by creating truncated JSONL), `Conversation` loader, `path_to_slug()` |
+| @reduck/claude_client.py | Claude Code Agent SDK wrapper. `ClaudeConfig` dataclass (defaults to `~/.claude`, user's own CLI). Single source of truth for session paths |
+| @reduck/server.py | FastAPI backend — SSE streaming, `GET /api/sessions/{id}/messages` (faithful content blocks), `POST /api/converse` (forks session on `leaf_uuid` for rewind). cwd-scoped: `PROJECT_CWD` from launch dir |
+| @reduck/cli.py | CLI entry point (`reduck` command). Checks `ANTHROPIC_API_KEY` + `claude` on PATH, starts uvicorn |
+| @pyproject.toml | Package config — `pip install reduck`, entry point `reduck = "reduck.cli:main"` |
 | @vibecoded_apps/CLAUDE.md | Svelte app conventions |
 | @vibecoded_apps/claude_talks/src/routes/home/+page.svelte | Home page — session list, fetches `GET /api/sessions`, navigates to `/live/:id` |
 | @vibecoded_apps/claude_talks/src/App.svelte | Router — `/` → HomePage, `/live` → LivePage, `/live/:id` → LivePage (with session), `/recordings` → RecordingsPage |
@@ -121,15 +123,10 @@ let inputText = $state('');                        // local interactive state
   - **Context accumulation**: Previous `[READ]:` turns stay in the TTS session's context window across converse calls. Accepted trade-off for reduced latency. If the context window fills up, Gemini will error and the session closes via `onerror`/`onclose`.
   - **`onFlush` callback for context injection**: `openTTSSession(apiKey, onFlush?)` accepts an optional callback that fires on every sentence-buffer flush alongside `sendText`. The callback receives clean text (without `[READ]:` prefix — that's added inside `sendText`). `gemini.ts` uses this to inject Claude's response into the outer Gemini session at the same sentence-boundary cadence as TTS audio. One buffer, two consumers. On `interrupt()` / `clear()`, the buffer is cleared without flushing — no stale context injection. On abort, `onChunk` is gated by `aborted` flag so `tts.send()` never fires, naturally preventing both TTS and context injection.
 - **Svelte app**: Gemini API key is stored client-side in `localStorage` (`claude-talks:ui`), managed via unified Settings modal in `+page.svelte`. Flows through DI: `ui.apiKey` → `data.svelte.ts` (`getApiKey` dep) → `gemini.ts` (`ConnectDeps.apiKey`). Settings modal auto-opens on first visit if no key is set.
-- **Claude SDK isolation**: The SDK subprocess must be fully isolated from the parent Claude Code session. Three layers:
-  1. `os.environ.pop("CLAUDECODE", None)` at import time — prevents "nested session" error
-  2. `cli_path` → `~/.claude-sdk/cli/node_modules/.bin/claude` — separate binary
-  3. `env={"CLAUDE_CONFIG_DIR": "~/.claude-sdk"}` — separate config/creds
-  4. `cwd` → temp dir — separate working directory
-- **Session path split** (`claude_client.py` → `server.py`): The SDK writes sessions under `~/.claude-sdk/projects/...` while the main CLI writes under `~/.claude/projects/...`. The backend MUST read from the same root the SDK writes to — currently `ISOLATED_CONFIG.project_dir`. Resuming a CLI-created session via the SDK **fails silently** (no output, no error — the SSE stream returns empty). If the home page lists sessions from one root but the SDK resumes from the other, resume is broken. `ClaudeConfig` ensures both derive from the same `config_dir`. The project slug uses hyphens (`-Users-dhuynh95-claude-talks`), not the filesystem's underscores — this is the CLI's own path sanitization, not a simple `replace("/", "-")`.
-- **SDK setup** (one-time): `npm install @anthropic-ai/claude-code --prefix ~/.claude-sdk/cli` then `CLAUDECODE= CLAUDE_CONFIG_DIR=~/.claude-sdk ~/.claude-sdk/cli/node_modules/.bin/claude login`
-- **SDK client lifetime**: `ClaudeSDKClient` goes stale after the first `receive_response()` — the second `query()` hangs forever. Use the standalone `query()` function instead, with `resume=session_id` (captured from `ResultMessage.session_id`) to maintain conversation across calls. Each call spawns a fresh subprocess but resumes the same session.
-- **SDK cwd constraint**: Setting `cwd` to a path inside `~/.claude/` causes the SDK subprocess to hang (observed, root cause unknown). This affects any project located under the Claude config directory, not just this one. Workaround: use a temp dir or a path outside `~/.claude/`.
+- **Nested session prevention** (`claude_client.py`): `os.environ.pop("CLAUDECODE", None)` at import time — prevents "nested session" error when `reduck` runs inside a Claude Code terminal.
+- **Session paths**: All sessions live under `~/.claude/projects/{slug}/`. The slug uses hyphens for ALL non-`[a-zA-Z0-9-]` chars — this is the CLI's own path sanitization (`path_to_slug()`). Example: `/Users/foo/my_project` → `-Users-foo-my-project`.
+- **cwd-scoped**: `reduck` is launched from a directory → that IS the project. `PROJECT_CWD = os.getcwd()` at server startup. No multi-project picker.
+- **SDK client lifetime**: Each `query()` call spawns a fresh subprocess. Use `resume=session_id` (captured from `ResultMessage.session_id`) to maintain conversation across calls.
 - **Interaction mode** (`ui.svelte.ts`): 2-way mode selector in Settings modal — `direct`, `review`. Persisted in localStorage (`claude-talks:ui` as `mode`).
   - **`direct`** — tool calls execute immediately, no approval UI.
   - **`review`** — single-stage approval: user sees instruction, Accept/Edit/Reject. If user edits, the diff is saved as a correction in `corrections.svelte.ts`. Acceptance can come from UI button OR voice (`webkitSpeechRecognition` via `voice-approval.ts`).
@@ -144,13 +141,11 @@ let inputText = $state('');                        // local interactive state
 
 ## Locations & commands
 
-- Session files (CLI): `~/.claude/projects/-{cwd-with-dashes}/{session-id}.jsonl`
-- Session files (SDK): `~/.claude-sdk/projects/-{cwd-with-dashes}/{session-id}.jsonl` — backend reads from here via `ISOLATED_CONFIG`
+- Session files: `~/.claude/projects/-{cwd-with-dashes}/{session-id}.jsonl`
 - Svelte app: `cd vibecoded_apps/claude_talks && npm run dev` (port 5173)
-- Watcher CLI: `python -m claude_talks.watcher /path/to/session.jsonl --handler log`
-- Backend: `uvicorn api.server:app --port 8000 --reload`
-- Test (mock, no credits): `curl -s -N -X POST http://localhost:8000/api/converse/test -H 'Content-Type: application/json' -d '{"instruction":"test"}'`
-- Test (real): `curl -s -N -X POST http://localhost:8000/api/converse -H 'Content-Type: application/json' -d '{"instruction":"say hello"}'`
+- Backend: `cd /path/to/project && reduck` (port 8000, auto-opens browser)
+- Backend (no browser): `reduck --no-browser --port 8000`
+- Test (real): `curl -s -N -X POST http://localhost:8000/api/converse -H 'Content-Type: application/json' -d '{"instruction":"say hello","model":"sonnet","system_prompt":"Be concise.","permission_mode":"plan"}'`
 
 ## Testing
 
@@ -164,7 +159,7 @@ python3 -c "
 import urllib.request, json
 req = urllib.request.Request(
     'http://localhost:8000/api/converse',
-    data=json.dumps({'instruction': 'say hello'}).encode(),
+    data=json.dumps({'instruction': 'say hello', 'model': 'sonnet', 'system_prompt': 'Be concise.', 'permission_mode': 'plan'}).encode(),
     headers={'Content-Type': 'application/json'},
 )
 with urllib.request.urlopen(req, timeout=60) as r:
@@ -175,7 +170,7 @@ with urllib.request.urlopen(req, timeout=60) as r:
 
 Or use **Claude in Chrome** `javascript_tool` with `fetch()` — browser stdout works fine.
 
-**`uvicorn --reload` doesn't reload transitive imports.** If you change `claude_client.py` (or any module imported by `server.py`), you must kill and restart the server process. `--reload` only re-imports the entry module.
+**`reduck` doesn't hot-reload.** It runs uvicorn without `--reload`. If you change any Python file, you must kill and restart the `reduck` process.
 
 ### E2E testing (Claude in Chrome)
 

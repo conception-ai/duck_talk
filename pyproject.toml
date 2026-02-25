@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["server"]
+packages = ["reduck"]
 
 [project.scripts]
-reduck = "server.cli:main"
+reduck = "reduck.cli:main"

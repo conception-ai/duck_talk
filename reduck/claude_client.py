@@ -18,7 +18,7 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 
-from server.models import path_to_slug
+from reduck.models import path_to_slug
 
 type PermissionMode = Literal["default", "acceptEdits", "plan", "bypassPermissions"]
 

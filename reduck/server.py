@@ -12,13 +12,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from server.claude_client import (
+from reduck.claude_client import (
     Claude,
     ClaudeConfig,
     ContentBlockChunk,
     TextDelta,
 )
-from server.models import (
+from reduck.models import (
     AssistantEntry,
     Conversation,
     UserEntry,
