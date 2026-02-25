@@ -9,24 +9,24 @@ Batch read them all in a single read. You must read context in a single turnÒ
 
 | File | Purpose |
 |------|---------|
-| @reduck/models.py | Session JSONL schema, `fork_session()` (rewind by creating truncated JSONL), `Conversation` loader, `path_to_slug()` |
-| @reduck/claude_client.py | Claude Code Agent SDK wrapper. `ClaudeConfig` dataclass (defaults to `~/.claude`, user's own CLI). Single source of truth for session paths |
-| @reduck/server.py | FastAPI backend — SSE streaming, `GET /api/sessions/{id}/messages` (faithful content blocks), `POST /api/converse` (forks session on `leaf_uuid` for rewind). cwd-scoped: `PROJECT_CWD` from launch dir |
-| @reduck/cli.py | CLI entry point (`reduck` command). Checks `ANTHROPIC_API_KEY` + `claude` on PATH, starts uvicorn |
-| @pyproject.toml | Package config — `pip install reduck`, entry point `reduck = "reduck.cli:main"` |
-| @vibecoded_apps/CLAUDE.md | Svelte app conventions |
-| @vibecoded_apps/claude_talks/src/routes/home/+page.svelte | Home page — session list, fetches `GET /api/sessions`, navigates to `/live/:id` |
-| @vibecoded_apps/claude_talks/src/App.svelte | Router — `/` → HomePage, `/live` → LivePage, `/live/:id` → LivePage (with session), `/recordings` → RecordingsPage |
-| @vibecoded_apps/claude_talks/src/routes/live/+page.svelte | Gemini Live — 3-zone layout: chat-scroll (messages + faded streaming bubble), dock (float transcription/approval + input-bar with real waveform + mic/stop), modals (Settings, Corrections). Waveform via second `getUserMedia` + `AnalyserNode`, synced to `live.status` via `$effect`. Loads history on mount. Renders `messages[]` only (not `voiceLog[]`) |
-| @vibecoded_apps/claude_talks/src/routes/live/types.ts | Re-exports render types from `lib/chat-types.ts` (`ContentBlock`, `Message`, `VoiceEvent`, `PendingTool`, `PendingApproval`, `Status`, `InteractionMode`, `Correction`). Keeps port interfaces locally: `DataStoreMethods`, `AudioPort`, `LiveBackend`, `ConverseApi`, `StreamingTTS`, `RealtimeInput` |
-| @vibecoded_apps/claude_talks/src/routes/live/stores/data.svelte.ts | Data store — two-array model: `messages[]` (CC conversation, mutable) + `voiceLog[]` (ephemeral, append-only). `loadHistory()`, `editMessage()`, session lifecycle, approval flow. `doCommitAssistant()` routes tool results to `messages[]`. No player lifecycle — TTS session owns its own player |
-| @vibecoded_apps/claude_talks/src/routes/live/stores/ui.svelte.ts | UI store — persistent user prefs (apiKey, mode: InteractionMode, model, systemPrompt, readbackEnabled, permissionMode). `setMode()` sets mode directly. `load()` merges localStorage with `DEFAULTS` so new fields get populated. Migrates old `learningMode: boolean` on load |
-| @vibecoded_apps/claude_talks/src/routes/live/gemini.ts | Gemini Live connection + message handling (STT + VAD + orchestration only — no TTS). 2-tool model: `converse` (forward instruction) + `stop` (cancel). `converse` is BLOCKING — Gemini freezes, tool response sent immediately as `{ result: "done" }` to unfreeze. Claude's response text is injected back into outer Gemini via TTS session's `onFlush` hook (`sendClientContent` with `role: 'model'`, `turnComplete: false`) — same sentence-boundary cadence as TTS audio. Stop detection uses browser-native `startKeywordListener` (from `voice-approval.ts`) during active converse — lower latency than Gemini's ASR. `stop` tool is pure control flow (no `startTool`/`finishTool`). Opens persistent TTS session once at `connectGemini()` scope. `holdWithVoice` wires voice approval during BLOCKING hold. `approvalPending` gates `sendRealtimeInput` |
-| @vibecoded_apps/claude_talks/src/routes/live/tts-session.ts | Persistent TTS session — self-contained Gemini Live session that speaks Claude's text. Owns its own connection, sentence buffer, and audio player. One instance per voice session, reused across converse calls. `send(text)` / `finish()` / `interrupt()` / `close()` interface. `interrupt()` mutes + flushes between converse calls; `close()` is final teardown. Each sentence-buffer flush sent as `sendClientContent(turnComplete: true)`. Tracks `pendingSends` counter. Prefixes text with `[READ]:` to prevent Gemini answering instead of reading. Optional `onFlush` callback — fires alongside `sendText` on each sentence-buffer flush, used by `gemini.ts` to piggyback context injection into outer Gemini |
-| @vibecoded_apps/claude_talks/src/routes/live/converse.ts | SSE stream consumer for /api/converse. Has `AbortController` + `abort()` method for cancelling in-flight streams (used by `back()`) |
-| @vibecoded_apps/claude_talks/src/routes/live/audio.ts | Browser audio I/O — mic capture (PCM worklet at 16kHz), gapless player (24kHz), one-shot playback. `createPlayer().stop()` guards against double-close (`ctx.state !== 'closed'`) |
-| @vibecoded_apps/claude_talks/src/routes/live/tools.ts | Gemini function declarations (`converse` — forward instruction, `stop` — cancel current work) + handlers |
-| @vibecoded_apps/claude_talks/src/routes/live/buffer.ts | Sentence-boundary text buffer — `createSentenceBuffer(onFlush, { minChars, maxWaitMs })`. Accumulates streaming text, flushes at sentence boundaries (`. ` `! ` `? `) when >= minChars (default 40) accumulated. Timer fallback (default 1000ms) for text without punctuation |
+| @src/shared/types.ts | Unified types for sessions + content blocks. Single source of truth — server and client both import from here. `ContentBlock` union, `SessionEntry`/`TreeEntry` unions, type guards |
+| @src/shared/models.ts | Session file operations — `Conversation` class, `walkPath()`, `forkSession()`, `pathToSlug()`, `readTail()`/`sessionPreview()` for fast JSONL scanning |
+| @src/server/claude-client.ts | TS Agent SDK wrapper. `ClaudeConfig`, `subprocessEnv()`. `Claude.converse()` async generator — streams `TextDelta \| ContentBlockChunk \| Result` |
+| @src/server/routes.ts | Express backend — SSE streaming, all API endpoints, `express.static()` for production. cwd-scoped: `PROJECT_CWD` from launch dir |
+| @src/server/cli.ts | CLI entry point. `.env` loader (zero-dep), prereq checks, Express listen, `publicDir` resolution for production mode |
+| @package.json | Package config — `npm start` (production), `npm run dev` (dev), `npm run build` (tsc + vite) |
+| @src/client/routes/home/+page.svelte | Home page — session list, fetches `GET /api/sessions`, navigates to `/live/:id` |
+| @src/client/App.svelte | Router — `/` → HomePage, `/live` → LivePage, `/live/:id` → LivePage (with session), `/recordings` → RecordingsPage |
+| @src/client/routes/live/+page.svelte | Gemini Live — 3-zone layout: chat-scroll (messages + faded streaming bubble), dock (float transcription/approval + input-bar with real waveform + mic/stop), modals (Settings, Corrections). Waveform via second `getUserMedia` + `AnalyserNode`, synced to `live.status` via `$effect`. Loads history on mount. Renders `messages[]` only (not `voiceLog[]`) |
+| @src/client/routes/live/types.ts | Re-exports render types from `lib/chat-types.ts` (`ContentBlock`, `Message`, `VoiceEvent`, `PendingTool`, `PendingApproval`, `Status`, `InteractionMode`, `Correction`). Keeps port interfaces locally: `DataStoreMethods`, `AudioPort`, `LiveBackend`, `ConverseApi`, `StreamingTTS`, `RealtimeInput` |
+| @src/client/routes/live/stores/data.svelte.ts | Data store — two-array model: `messages[]` (CC conversation, mutable) + `voiceLog[]` (ephemeral, append-only). `loadHistory()`, `editMessage()`, session lifecycle, approval flow. `doCommitAssistant()` routes tool results to `messages[]`. No player lifecycle — TTS session owns its own player |
+| @src/client/routes/live/stores/ui.svelte.ts | UI store — persistent user prefs (apiKey, mode: InteractionMode, model, systemPrompt, readbackEnabled, permissionMode). `setMode()` sets mode directly. `load()` merges localStorage with `DEFAULTS` so new fields get populated. Migrates old `learningMode: boolean` on load |
+| @src/client/routes/live/gemini.ts | Gemini Live connection + message handling (STT + VAD + orchestration only — no TTS). 2-tool model: `converse` (forward instruction) + `stop` (cancel). `converse` is BLOCKING — Gemini freezes, tool response sent immediately as `{ result: "done" }` to unfreeze. Claude's response text is injected back into outer Gemini via TTS session's `onFlush` hook (`sendClientContent` with `role: 'model'`, `turnComplete: false`) — same sentence-boundary cadence as TTS audio. Stop detection uses browser-native `startKeywordListener` (from `voice-approval.ts`) during active converse — lower latency than Gemini's ASR. `stop` tool is pure control flow (no `startTool`/`finishTool`). Opens persistent TTS session once at `connectGemini()` scope. `holdWithVoice` wires voice approval during BLOCKING hold. `approvalPending` gates `sendRealtimeInput` |
+| @src/client/routes/live/tts-session.ts | Persistent TTS session — self-contained Gemini Live session that speaks Claude's text. Owns its own connection, sentence buffer, and audio player. One instance per voice session, reused across converse calls. `send(text)` / `finish()` / `interrupt()` / `close()` interface. `interrupt()` mutes + flushes between converse calls; `close()` is final teardown. Each sentence-buffer flush sent as `sendClientContent(turnComplete: true)`. Tracks `pendingSends` counter. Prefixes text with `[READ]:` to prevent Gemini answering instead of reading. Optional `onFlush` callback — fires alongside `sendText` on each sentence-buffer flush, used by `gemini.ts` to piggyback context injection into outer Gemini |
+| @src/client/routes/live/converse.ts | SSE stream consumer for /api/converse. Has `AbortController` + `abort()` method for cancelling in-flight streams (used by `back()`) |
+| @src/client/routes/live/audio.ts | Browser audio I/O — mic capture (PCM worklet at 16kHz), gapless player (24kHz), one-shot playback. `createPlayer().stop()` guards against double-close (`ctx.state !== 'closed'`) |
+| @src/client/routes/live/tools.ts | Gemini function declarations (`converse` — forward instruction, `stop` — cancel current work) + handlers |
+| @src/client/routes/live/buffer.ts | Sentence-boundary text buffer — `createSentenceBuffer(onFlush, { minChars, maxWaitMs })`. Accumulates streaming text, flushes at sentence boundaries (`. ` `! ` `? `) when >= minChars (default 40) accumulated. Timer fallback (default 1000ms) for text without punctuation |
 
 ## Files to read if needed
 
@@ -34,18 +34,18 @@ Batch read them all in a single read. You must read context in a single turnÒ
 |------|---------|
 | docs/gemini-live-docs.md | Gemini Live API reference — capabilities, VAD config, function calling, session management |
 | docs/claude_code_python_sdk.md | Claude Agent SDK reference — `ClaudeAgentOptions`, `ClaudeSDKClient`, `query()`. No leaf/branch control exists; `resume` is session ID only |
-| vibecoded_apps/claude_talks/src/lib/tts.ts | TTS utility — `speak(apiKey, text)` → base64 PCM at 24kHz via Gemini TTS. Imported by `+page.svelte` for readback (plays instruction via `playPcmChunks` before approval). Also dynamically imported by Chrome MCP test scripts |
-| vibecoded_apps/claude_talks/src/routes/live/stores/corrections.svelte.ts | Corrections store — localStorage-persisted STT corrections |
-| vibecoded_apps/claude_talks/src/routes/live/correct.ts | Stateless LLM auto-correction — `correctInstruction(llm, instruction, corrections)`. Text-only today, planned: multimodal with audio (see `roadmap/todos/correction_llm_accuracy.md`) |
-| vibecoded_apps/claude_talks/src/routes/live/voice-approval.ts | Browser `webkitSpeechRecognition` keyword listener. Generic `startKeywordListener(keywords, { tag, lang })` matches words against a callback map, auto-stops on first match. Exports keyword constants (`ACCEPT_WORDS`, `REJECT_WORDS`, `STOP_WORDS`). `startVoiceApproval` is a thin wrapper for approval holds. Used for both approval keywords and stop detection during converse |
-| vibecoded_apps/claude_talks/src/lib/llm.ts | LLM abstraction — `createLLM({ apiKey })` → callable with `.stream()`, `.json<T>()`. Supports multimodal: `Message.content` accepts `string` or `Part[]` (text + `inlineData` for audio/images) |
-| vibecoded_apps/claude_talks/src/lib/stt.ts | Pure audio utilities — `combineChunks` (merge base64 PCM), `chunksToWav` (PCM → WAV). No LLM dependency |
-| vibecoded_apps/claude_talks/src/lib/recording-db.ts | IndexedDB CRUD for utterance recordings — `saveRecording`, `getAllRecordings`, `deleteRecording`, `clearAllRecordings` |
-| vibecoded_apps/claude_talks/src/lib/recorder.ts | Black-box utterance recorder — taps `getUserMedia` to capture mic audio, auto-segments on `utterance-committed` CustomEvents, persists to IndexedDB. Setup called from live `+page.svelte` on mount. Console access via `window.__recorder` |
-| vibecoded_apps/claude_talks/src/routes/recordings/+page.svelte | Recordings browser — reads from IndexedDB, lists utterances with play/download/delete buttons. Route: `/#/recordings` |
-| vibecoded_apps/claude_talks/src/lib/chat-types.ts | Shared render types: `Message`, `ContentBlock`, `PendingTool`, `PendingApproval`, `Status`, `VoiceEvent`, `Correction`, `InteractionMode`. Source of truth — `live/types.ts` re-exports from here |
-| vibecoded_apps/claude_talks/src/lib/message-helpers.ts | Pure functions on `Message`: `messageText()`, `messageToolUses()`, `messageToolResults()`, `messageThinking()`, `buildToolResultMap()`, `isToolResultOnly()`. Used by both `live/` and `new-ui/` |
-| vibecoded_apps/claude_talks/src/lib/dev/ScenarioSelector.svelte | Reusable dev dropdown for switching UI states. Generic over `T` (any scenario state shape). Positioned top-right |
+| src/client/lib/tts.ts | TTS utility — `speak(apiKey, text)` → base64 PCM at 24kHz via Gemini TTS. Imported by `+page.svelte` for readback (plays instruction via `playPcmChunks` before approval). Also dynamically imported by Chrome MCP test scripts |
+| src/client/routes/live/stores/corrections.svelte.ts | Corrections store — localStorage-persisted STT corrections |
+| src/client/routes/live/correct.ts | Stateless LLM auto-correction — `correctInstruction(llm, instruction, corrections)`. Text-only today, planned: multimodal with audio (see `roadmap/todos/correction_llm_accuracy.md`) |
+| src/client/routes/live/voice-approval.ts | Browser `webkitSpeechRecognition` keyword listener. Generic `startKeywordListener(keywords, { tag, lang })` matches words against a callback map, auto-stops on first match. Exports keyword constants (`ACCEPT_WORDS`, `REJECT_WORDS`, `STOP_WORDS`). `startVoiceApproval` is a thin wrapper for approval holds. Used for both approval keywords and stop detection during converse |
+| src/client/lib/llm.ts | LLM abstraction — `createLLM({ apiKey })` → callable with `.stream()`, `.json<T>()`. Supports multimodal: `Message.content` accepts `string` or `Part[]` (text + `inlineData` for audio/images) |
+| src/client/lib/stt.ts | Pure audio utilities — `combineChunks` (merge base64 PCM), `chunksToWav` (PCM → WAV). No LLM dependency |
+| src/client/lib/recording-db.ts | IndexedDB CRUD for utterance recordings — `saveRecording`, `getAllRecordings`, `deleteRecording`, `clearAllRecordings` |
+| src/client/lib/recorder.ts | Black-box utterance recorder — taps `getUserMedia` to capture mic audio, auto-segments on `utterance-committed` CustomEvents, persists to IndexedDB. Setup called from live `+page.svelte` on mount. Console access via `window.__recorder` |
+| src/client/routes/recordings/+page.svelte | Recordings browser — reads from IndexedDB, lists utterances with play/download/delete buttons. Route: `/#/recordings` |
+| src/client/lib/chat-types.ts | Re-exports `ContentBlock` from `src/shared/types.ts` (single source of truth). UI-only types defined locally: `Message`, `PendingTool`, `PendingApproval`, `Status`, `VoiceEvent`, `Correction`, `InteractionMode`. `live/types.ts` re-exports from here |
+| src/client/lib/message-helpers.ts | Pure functions on `Message`: `messageText()`, `messageToolUses()`, `messageToolResults()`, `messageThinking()`, `buildToolResultMap()`, `isToolResultOnly()`. Used by both `live/` and `new-ui/` |
+| src/client/lib/dev/ScenarioSelector.svelte | Reusable dev dropdown for switching UI states. Generic over `T` (any scenario state shape). Positioned top-right |
 
 ## Guiding Principles
 
@@ -79,7 +79,7 @@ let inputText = $state('');                        // local interactive state
 ## Gotchas
 
 - **Two-array data model** (`data.svelte.ts`): State is split into two arrays with different lifecycles:
-  - `messages: Message[]` — CC conversation only. Persistent (loaded from backend, appended during converse, truncated on "back"). 1:1 with `models.py` content blocks. `commitTurn()` routes converse tool results here.
+  - `messages: Message[]` — CC conversation only. Persistent (loaded from backend, appended during converse, truncated on "back"). 1:1 with `types.ts` content blocks. `commitTurn()` routes converse tool results here.
   - `voiceLog: VoiceEvent[]` — user speech + errors. Append-only, session-local, lost on page reload. `commitTurn()` routes `pendingInput` here. `pushError()` also goes here.
   - **Why**: "go back" pops from `messages[]` but leaves `voiceLog[]` untouched. Can't do this cleanly with one interleaved array.
 - **Message quality levels**: `messages[]` has two fidelity levels depending on source:
@@ -88,7 +88,7 @@ let inputText = $state('');                        // local interactive state
   - Both render fine. When user navigates away and returns, history reload gives full fidelity.
 - **`walk_path()` returns leaf-to-root order**: `Conversation.walk_path(leaf_uuid)` returns `[leaf, ..., root]`. Must `.reverse()` for display. The backend `GET /messages` endpoint handles this.
 - **CLI ignores `SummaryEntry.leafUuid`** (proven experimentally): When resuming with `--resume <session_id>`, the CLI always picks the deepest leaf in the tree, NOT the `leafUuid` from a `SummaryEntry`. `Conversation.active_leaf` matches this behavior (just deepest leaf). The only way to rewind is `fork_session()`: create a new JSONL with only the path entries up to the target message, then resume THAT session. The frontend auto-adopts the new `session_id` from the done event (`converse.ts:103`).
-- **Backend serialization — no wrapper model**: `AssistantEntry.message.content` is `list[ContentBlock]` (pydantic models). Just call `.model_dump(exclude_none=True)` on each block — naturally produces the right JSON. `UserEntry.message.content` (`str | list[JsonDict]`) returned as-is.
+- **Backend serialization**: `AssistantEntry.message.content` is `ContentBlock[]` (plain TS objects). `routes.ts` filters null/undefined keys when serializing (equivalent of pydantic's `exclude_none`). `UserEntry.message.content` (`string | JsonDict[]`) returned as-is.
 - **`editMessage()` abort race condition** (`data.svelte.ts`): `api.abort()` is sync but the AbortError fires on the next microtask. The error callback in `gemini.ts` calls `finishTool()` which could commit partial results. Solution: `editMessage()` clears `pendingTool = null` BEFORE the await, so `finishTool()` short-circuits when the async error arrives.
 - **Gemini Live**: use `types.LiveConnectConfig` + `types.Modality.AUDIO` (not raw dicts). `model_turn.parts` can be `None`. File input needs chunking + `audio_stream_end=True`.
 - **Audio format split**: Gemini Live (`sendRealtimeInput`) accepts raw PCM (`audio/pcm;rate=16000`). `generateContent` does NOT — it needs a proper container format (WAV, MP3, etc.). Use `chunksToWav()` from `stt.ts` to wrap PCM before passing to `llm()`. Confirmed by experiment: raw PCM → hallucinated output; WAV → correct transcription.
@@ -123,9 +123,9 @@ let inputText = $state('');                        // local interactive state
   - **Context accumulation**: Previous `[READ]:` turns stay in the TTS session's context window across converse calls. Accepted trade-off for reduced latency. If the context window fills up, Gemini will error and the session closes via `onerror`/`onclose`.
   - **`onFlush` callback for context injection**: `openTTSSession(apiKey, onFlush?)` accepts an optional callback that fires on every sentence-buffer flush alongside `sendText`. The callback receives clean text (without `[READ]:` prefix — that's added inside `sendText`). `gemini.ts` uses this to inject Claude's response into the outer Gemini session at the same sentence-boundary cadence as TTS audio. One buffer, two consumers. On `interrupt()` / `clear()`, the buffer is cleared without flushing — no stale context injection. On abort, `onChunk` is gated by `aborted` flag so `tts.send()` never fires, naturally preventing both TTS and context injection.
 - **Svelte app**: Gemini API key is stored client-side in `localStorage` (`claude-talks:ui`), managed via unified Settings modal in `+page.svelte`. Flows through DI: `ui.apiKey` → `data.svelte.ts` (`getApiKey` dep) → `gemini.ts` (`ConnectDeps.apiKey`). Settings modal auto-opens on first visit if no key is set.
-- **Nested session prevention** (`claude_client.py`): `os.environ.pop("CLAUDECODE", None)` at import time — prevents "nested session" error when `reduck` runs inside a Claude Code terminal.
+- **Nested session prevention** (`claude-client.ts`): `delete process.env['CLAUDECODE']` at import time — prevents "nested session" error when `reduck` runs inside a Claude Code terminal.
 - **Session paths**: All sessions live under `~/.claude/projects/{slug}/`. The slug uses hyphens for ALL non-`[a-zA-Z0-9-]` chars — this is the CLI's own path sanitization (`path_to_slug()`). Example: `/Users/foo/my_project` → `-Users-foo-my-project`.
-- **cwd-scoped**: `reduck` is launched from a directory → that IS the project. `PROJECT_CWD = os.getcwd()` at server startup. No multi-project picker.
+- **cwd-scoped**: `reduck` is launched from a directory → that IS the project. `PROJECT_CWD = process.cwd()` at server startup. No multi-project picker.
 - **SDK client lifetime**: Each `query()` call spawns a fresh subprocess. Use `resume=session_id` (captured from `ResultMessage.session_id`) to maintain conversation across calls.
 - **Interaction mode** (`ui.svelte.ts`): 2-way mode selector in Settings modal — `direct`, `review`. Persisted in localStorage (`claude-talks:ui` as `mode`).
   - **`direct`** — tool calls execute immediately, no approval UI.
@@ -139,12 +139,25 @@ let inputText = $state('');                        // local interactive state
 - **Vite HMR doesn't propagate deep .ts changes**: Editing `tts-session.ts` (imported by `gemini.ts` → `data.svelte.ts` → `+page.svelte`) does NOT trigger HMR reload. The old module stays cached. For isolated testing via Chrome MCP, use `import('/src/path.ts?v=' + Date.now())` to cache-bust. For production, hard refresh (Cmd+Shift+R) is required.
 - **Utterance recorder** (`recorder.ts`): Black-box getUserMedia tap — runs a parallel AudioWorklet (`recorder-proc`) alongside the app's `pcm-processor`. Both consume the same MediaStream independently. Auto-segments via `utterance-committed` CustomEvent emitted from `commitTurn()` in `data.svelte.ts` (1 line). Persists to IndexedDB via `recording-db.ts`. `setup()` is called from live `+page.svelte` on mount (before `startMic()`). Console: `window.__recorder.recordings`, `.segment()`, `.download(i)`. Recordings page at `/#/recordings` reads from same IndexedDB.
 
+### TS backend gotchas (post-migration)
+
+- **ContentBlock type unification**: `chat-types.ts` re-exports `ContentBlock` from `src/shared/types.ts`. The `tool_result.content` field is `string | JsonDict[]` (wider than the old client-only `string`). `buildToolResultMap` in `message-helpers.ts` stringifies array content. Any new code touching `tool_result.content` must handle both variants.
+- **tsconfig isolation**: `tsconfig.app.json` includes only `src/client/**/*`. Importing from `src/shared/models.ts` (which uses Node `fs` APIs) in client code will fail — no `@types/node` in the browser context. Only pure-type imports from `src/shared/types.ts` work from client code. TypeScript follows imports automatically, so `src/shared/types.ts` doesn't need explicit inclusion.
+- **Two build outputs in `dist/`**: `tsc` outputs `dist/server/` + `dist/shared/`, Vite outputs `dist/public/`. They coexist. `npm run build` runs both sequentially. Don't `rm -rf dist` between them.
+- **Production static serving**: `npm start` auto-detects `dist/public/` via `import.meta.url` and serves it with `express.static()`. Works from both `src/server/` (tsx dev) and `dist/server/` (compiled prod) because the relative path `../../dist/public` resolves correctly from both locations. Hash routing (`/#/live`) means no SPA catch-all needed.
+- **`.env` loading**: `cli.ts` has a zero-dep `.env` loader (~10 lines). Only sets vars not already in `process.env` — real env vars take precedence. Loaded before anything else in the CLI.
+- **SDK type casts**: TS Agent SDK v0.2.56 uses `BetaMessage`/`BetaRawMessageStreamEvent` types. `claude-client.ts` uses `as unknown as Record<string, unknown>` casts to extract streaming deltas. May change in future SDK versions.
+- **SDK error discrimination**: `SDKResultSuccess` has `result: string`, `SDKResultError` has `errors: string[]` (NOT `result`). Use `msg.is_error` + `'errors' in msg` to discriminate. Different from Python SDK.
+- **Old Python backend**: Archived in `archive/reduck/` for reference. Not used at runtime.
+
 ## Locations & commands
 
 - Session files: `~/.claude/projects/-{cwd-with-dashes}/{session-id}.jsonl`
-- Svelte app: `cd vibecoded_apps/claude_talks && npm run dev` (port 5173)
-- Backend: `cd /path/to/project && reduck` (port 8000, auto-opens browser)
-- Backend (no browser): `reduck --no-browser --port 8000`
+- Production (single server): `npm run build && npm start` (port 8000, serves API + frontend)
+- Dev (two servers): `npm run dev:server` (Express :8000) + `npm run dev:client` (Vite :5173)
+- Dev (both at once): `npm run dev`
+- No browser: `npm start -- --no-browser --port 8001`
+- Type-check: `npm run check` (server + client)
 - Test (real): `curl -s -N -X POST http://localhost:8000/api/converse -H 'Content-Type: application/json' -d '{"instruction":"say hello","model":"sonnet","system_prompt":"Be concise.","permission_mode":"plan"}'`
 
 ## Testing
@@ -170,7 +183,7 @@ with urllib.request.urlopen(req, timeout=60) as r:
 
 Or use **Claude in Chrome** `javascript_tool` with `fetch()` — browser stdout works fine.
 
-**`reduck` doesn't hot-reload.** It runs uvicorn without `--reload`. If you change any Python file, you must kill and restart the `reduck` process.
+**`npm run dev:server` uses `tsx` (no hot-reload).** Changes to any `src/server/` or `src/shared/` file require killing and restarting the server process.
 
 ### E2E testing (Claude in Chrome)
 
