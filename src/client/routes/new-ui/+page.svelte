@@ -67,6 +67,8 @@
   let outputMuted = $state(false);
   let transcriptionMode = $state<'direct' | 'review'>('review');
   let permissionMode = $state<'plan' | 'accept-edits'>('plan');
+  const PERMISSION_MODES = ['plan', 'accept-edits'] as const;
+  let permissionModeLabel = $derived(permissionMode === 'plan' ? 'Plan' : 'Accept Edits');
 
   function startRename() {
     renameInput = sessionTitle;
@@ -90,8 +92,38 @@
     micHasBeenUsed = localStorage.getItem('mic-used') === 'true';
     requestAnimationFrame(() => { mounted = true; });
 
+    function onGlobalKey(e: KeyboardEvent) {
+      if (e.key === 'Escape' && inputMode === 'recording') {
+        e.preventDefault();
+        exitLive();
+        return;
+      }
+      // Shift+Tab: cycle permission mode (in empty or conversation idle)
+      if (e.key === 'Tab' && e.shiftKey && inputMode === 'idle') {
+        e.preventDefault();
+        const idx = PERMISSION_MODES.indexOf(permissionMode);
+        permissionMode = PERMISSION_MODES[(idx + 1) % PERMISSION_MODES.length];
+        return;
+      }
+      // Cmd+M: start Live mode
+      if (e.metaKey && e.key === 'm' && inputMode === 'idle') {
+        e.preventDefault();
+        onMicClick();
+        return;
+      }
+      // When mic-center is showing and no input is focused, handle typing
+      const active = document.activeElement;
+      const isInputFocused = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement;
+      if (showMicCenter && !isInputFocused) {
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        if (e.key.length === 1) { e.preventDefault(); switchToTyping(e.key); }
+      }
+    }
+    window.addEventListener('keydown', onGlobalKey);
+
     return () => {
       if (placeholderInterval) clearInterval(placeholderInterval);
+      window.removeEventListener('keydown', onGlobalKey);
     };
   });
 
@@ -115,7 +147,7 @@
 
   // Empty mode: mic-centered vs typing
   let typingMode = $state(false);
-  let showMicCenter = $derived(isEmpty && !typingMode && !inputText.trim());
+  let showMicCenter = $derived(isEmpty && !inputText.trim());
 
   function switchToTyping(initialChar = '') {
     typingMode = true;
@@ -127,10 +159,9 @@
 
   function onMicCenterKey(e: KeyboardEvent) {
     // Ignore modifier keys, Tab, Escape, etc.
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.ctrlKey || e.altKey) return;
     if (e.key === 'Tab' || e.key === 'Escape' || e.key === 'Shift') return;
-    // Space → start live mode
-    if (e.key === ' ') { e.preventDefault(); onMicClick(); return; }
+    // Cmd+M → start live mode (handled by global handler)
     if (e.key === 'Enter') { switchToTyping(); return; }
     // Printable character — switch to typing with that char
     if (e.key.length === 1) {
@@ -198,10 +229,10 @@
 
   let inputTip = $derived(
     inputMode === 'review' ? 'Say <span class="tip-tag">Send</span> or <span class="tip-tag">Clear</span>' :
-    inputMode === 'recording' ? 'Say <span class="tip-tag">Stop</span> to end recording' :
+    inputMode === 'recording' ? 'Press <span class="tip-tag">ESC</span> to exit Live' :
     inputMode === 'streaming' ? 'Say <span class="tip-tag">Stop</span> to interrupt' :
     inputText.trim() ? 'Press Enter to send' :
-    'Press <span class="tip-tag tip-mono">space</span> to start Live'
+    `Permission mode: <span class="tip-tag ${permissionMode === 'plan' ? 'tip-info' : 'tip-success'}">${permissionModeLabel}</span> <span class="tip-hint">(shift+tab to switch)</span>`
   );
 
   // Waveform bar heights (matching voice waveform envelope from reference image)
@@ -221,6 +252,11 @@
       localStorage.setItem('mic-used', 'true');
     }
     statusOverride = 'connected';
+  }
+
+  function exitLive() {
+    statusOverride = 'idle';
+    requestAnimationFrame(() => textareaEl?.focus());
   }
 
   function clearInput() {
@@ -256,16 +292,25 @@
   }
 
   // Tooltip action — portals a tooltip to <body> on hover (matching Reduck Tooltip)
-  function tooltip(node: HTMLElement, text: string) {
+  /** Build tooltip HTML with optional keyboard shortcut and voice command */
+  const MIC_SVG = '<svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>';
+  function tip(label: string, opts?: { kbd?: string; voice?: string }) {
+    if (!opts || (!opts.kbd && !opts.voice)) return label;
+    const tags: string[] = [];
+    if (opts.kbd) tags.push(`<span class="tt-kbd">${opts.kbd}</span>`);
+    if (opts.voice) tags.push(`<span class="tt-voice">${MIC_SVG}${opts.voice}</span>`);
+    const row = `<span class="tt-shortcuts">${tags.join('')}</span>`;
+    if (opts.kbd && opts.voice) return `<span class="tt-label">${label}</span>${row}`;
+    return `${label} ${row}`;
+  }
+
+  function tooltip(node: HTMLElement, html: string) {
     let el: HTMLDivElement | null = null;
 
     function show() {
       el = document.createElement('div');
       el.className = 'portal-tooltip';
-      el.textContent = text;
-      const arrowEl = document.createElement('div');
-      arrowEl.className = 'portal-tooltip-arrow';
-      el.appendChild(arrowEl);
+      el.innerHTML = html + '<div class="portal-tooltip-arrow"></div>';
       document.body.appendChild(el);
       // Position after the browser has laid out the element
       requestAnimationFrame(() => {
@@ -287,7 +332,7 @@
     node.addEventListener('mouseleave', hide);
 
     return {
-      update(newText: string) { text = newText; },
+      update(newHtml: string) { html = newHtml; },
       destroy() {
         hide();
         node.removeEventListener('mouseenter', show);
@@ -426,16 +471,18 @@
                   {#each messageToolUses(msg) as tool}
                     <details class="tool-use">
                       <summary><span class="tool-pill">{tool.name}</span></summary>
-                      {#if tool.input.command}
-                        <p class="tool-args">{tool.input.command}</p>
-                      {:else if tool.input.instruction}
-                        <p class="tool-args">{tool.input.instruction}</p>
-                      {:else if Object.keys(tool.input).length}
-                        <p class="tool-args">{JSON.stringify(tool.input)}</p>
-                      {/if}
-                      {#if resultMap.get(tool.id)}
-                        <p class="tool-text">{resultMap.get(tool.id)}</p>
-                      {/if}
+                      <div class="tool-details">
+                        {#if tool.input.command}
+                          <p class="tool-args">{tool.input.command}</p>
+                        {:else if tool.input.instruction}
+                          <p class="tool-args">{tool.input.instruction}</p>
+                        {:else if Object.keys(tool.input).length}
+                          <p class="tool-args">{JSON.stringify(tool.input)}</p>
+                        {/if}
+                        {#if resultMap.get(tool.id)}
+                          <p class="tool-text">{resultMap.get(tool.id)}</p>
+                        {/if}
+                      </div>
                     </details>
                   {/each}
                 {/if}
@@ -464,7 +511,7 @@
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div class="mic-center-zone" onclick={() => { document.querySelector<HTMLInputElement>('.mic-center-trap')?.focus(); }}>
-                <button class="mic-center-btn" class:mic-intro={micGlow} aria-label="Start Live" use:tooltip={'Start Live'} onclick={(e) => { e.stopPropagation(); onMicClick(); }}>
+                <button class="mic-center-btn" class:mic-intro={micGlow} aria-label="Start talking" use:tooltip={tip('Start talking', { kbd: '⌘M' })} onclick={(e) => { e.stopPropagation(); onMicClick(); }}>
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                       <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
                     </svg>
@@ -554,9 +601,9 @@
                     <span style="--h: {h}px; animation-delay: {(i * 0.08) % 1.6}s"></span>
                   {/each}
                 </div>
-                <button class="primary-btn stop-btn" aria-label="Stop recording" use:tooltip={'Stop recording'}>
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-                    <rect x="6" y="6" width="12" height="12" rx="2"/>
+                <button class="primary-btn stop-btn" aria-label="Exit Live" use:tooltip={tip('Exit Live', { kbd: 'ESC', voice: 'Exit Live' })} onclick={exitLive}>
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                    <line x1="7" y1="7" x2="17" y2="17"/><line x1="17" y1="7" x2="7" y2="17"/>
                   </svg>
                 </button>
               {:else if inputMode === 'review'}
@@ -566,8 +613,8 @@
                     <span style="--h: {h}px; animation-delay: {(i * 0.08) % 1.6}s"></span>
                   {/each}
                 </div>
-                <button class="text-btn clear-btn" use:tooltip={'Clear'} onclick={clearInput}>Clear</button>
-                <button class="primary-btn send-btn" aria-label="Send" use:tooltip={'Send'}>
+                <button class="text-btn clear-btn" use:tooltip={tip('Clear', { voice: 'Clear' })} onclick={clearInput}>Clear</button>
+                <button class="primary-btn send-btn" aria-label="Send" use:tooltip={tip('Send', { kbd: 'Enter', voice: 'Send' })}>
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                     <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
                   </svg>
@@ -575,7 +622,7 @@
               {:else if inputMode === 'streaming'}
                 <!-- Streaming: stop button active -->
                 <span class="controls-spacer"></span>
-                <button class="primary-btn stop-btn" aria-label="Stop" use:tooltip={'Stop'}>
+                <button class="primary-btn stop-btn" aria-label="Stop" use:tooltip={tip('Stop', { voice: 'Stop' })}>
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
                     <rect x="6" y="6" width="12" height="12" rx="2"/>
                   </svg>
@@ -583,22 +630,45 @@
               {:else}
                 <!-- Idle: spacer + model select + send (mic is centered above when empty) -->
                 {#if showMicCenter}
-                  <button class="type-instead" type="button" onclick={() => switchToTyping()}>or start typing</button>
+                  <span class="type-instead">or start typing</span>
                 {/if}
                 <span class="controls-spacer"></span>
-                <span class="model-select-wrap" use:tooltip={'Change model'}>
-                  <select class="model-select" bind:value={selectedModel}>
-                    <option value="opus">Opus</option>
-                    <option value="sonnet">Sonnet</option>
-                    <option value="haiku">Haiku</option>
-                  </select>
-                </span>
-                {#if inputText.trim()}
-                  <button class="primary-btn send-btn" aria-label="Send" use:tooltip={'Send'}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                      <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-                    </svg>
-                  </button>
+                {#if !showMicCenter}
+                  <span class="model-select-wrap" use:tooltip={'Change model'}>
+                    <select class="model-select" bind:value={selectedModel}>
+                      <option value="opus">Opus</option>
+                      <option value="sonnet">Sonnet</option>
+                      <option value="haiku">Haiku</option>
+                    </select>
+                  </span>
+                  {#if inputText.trim()}
+                    <button class="primary-btn send-btn" aria-label="Send" use:tooltip={tip('Send', { kbd: 'Enter' })}>
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                      </svg>
+                    </button>
+                  {:else}
+                    <button class="ghost-btn mic-corner-btn" aria-label="Start talking" use:tooltip={tip('Start talking', { kbd: '⌘M' })} onclick={onMicClick}>
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                        <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
+                      </svg>
+                    </button>
+                  {/if}
+                {:else}
+                  <span class="model-select-wrap" use:tooltip={'Change model'}>
+                    <select class="model-select" bind:value={selectedModel}>
+                      <option value="opus">Opus</option>
+                      <option value="sonnet">Sonnet</option>
+                      <option value="haiku">Haiku</option>
+                    </select>
+                  </span>
+                  {#if inputText.trim()}
+                    <button class="primary-btn send-btn" aria-label="Send" use:tooltip={tip('Send', { kbd: 'Enter' })}>
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                      </svg>
+                    </button>
+                  {/if}
                 {/if}
               {/if}
             </div>
@@ -1039,7 +1109,9 @@
   .tool-use summary::-webkit-details-marker { display: none; }
 
   .tool-pill {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
     font-size: var(--font-size-caption);
     font-family: monospace;
     padding: 0.15rem 0.5rem;
@@ -1049,15 +1121,23 @@
     transition: background 200ms;
   }
 
+
+  .tool-details {
+    margin-top: 4px;
+    margin-left: 4px;
+    padding: 0.4rem 0.6rem;
+    border-left: 2px solid var(--color-blue-500-translucent-18);
+    border-radius: 0 8px 8px 0;
+  }
+
   .tool-args {
     font-size: var(--font-size-small);
     font-style: italic;
     color: var(--color-grey-400);
-    margin: 0.25rem 0 0;
+    margin: 0;
     padding: 0.4rem 0.6rem;
     background: var(--color-grey-900);
     border-radius: 8px;
-    border: 1px solid var(--color-grey-600);
   }
 
   .tool-text {
@@ -1066,6 +1146,7 @@
     max-height: 200px;
     overflow-y: auto;
     color: var(--color-grey-300);
+    margin-top: 4px;
   }
 
   /* Dots */
@@ -1117,15 +1198,27 @@
     color: var(--color-grey-200);
   }
 
-  .input-tip :global(.tip-mono) {
-    font-family: 'Courier New', Courier, monospace;
+  .input-tip :global(.tip-info) {
+    background: var(--color-blue-500-translucent-18);
+    color: var(--color-blue-300);
   }
+
+  .input-tip :global(.tip-success) {
+    background: var(--color-green-500-translucent-18);
+    color: var(--color-green-300);
+  }
+
+  .input-tip :global(.tip-hint) {
+    color: var(--color-grey-400);
+  }
+
 
   /* Portal tooltip (matching Reduck Tooltip component) — injected into <body> */
   :global(.portal-tooltip) {
     position: fixed;
-    background: var(--color-grey-50);
-    color: var(--color-grey-900);
+    text-align: center;
+    background: var(--color-grey-900);
+    color: var(--color-grey-50);
     font-size: 0.75rem;
     padding: 4px 8px;
     border-radius: 4px;
@@ -1144,7 +1237,35 @@
     transform: translateX(-50%) rotate(45deg);
     width: 6px;
     height: 6px;
-    background: var(--color-grey-50);
+    background: var(--color-grey-900);
+  }
+
+  /* Two-line tooltip: label on top, shortcuts below */
+  :global(.tt-label) {
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  :global(.tt-shortcuts) {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  :global(.tt-kbd),
+  :global(.tt-voice) {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.65rem;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--color-grey-700);
+    color: var(--color-grey-300);
+  }
+
+  :global(.tt-voice svg) {
+    flex-shrink: 0;
   }
 
   .input-box {
@@ -1160,9 +1281,8 @@
   .input-box:hover { border-color: var(--color-grey-500); }
   .input-box:focus-within { border-color: var(--color-orange-400); }
 
-  /* Mic-center mode (empty idle) — fixed 98px height */
+  /* Mic-center mode (empty idle) */
   .input-box.mic-center {
-    height: 98px;
     overflow: visible;
   }
 
@@ -1181,8 +1301,8 @@
     justify-content: center;
     flex: 1;
     cursor: text;
-    margin-bottom: 0;
-    padding: 0;
+    margin-top: 16px;
+    margin-bottom: 4px;
   }
 
   .mic-center-btn {
@@ -1223,19 +1343,12 @@
     position: absolute;
     left: 50%;
     transform: translateX(-50%);
-    background: none;
-    border: none;
     color: var(--color-grey-400);
-    font-size: var(--font-size-caption);
+    font-size: var(--font-size-small);
     font-family: inherit;
-    cursor: pointer;
     padding: 0;
-    transition: color 200ms;
     white-space: nowrap;
-  }
-
-  .type-instead:hover {
-    color: var(--color-grey-200);
+    pointer-events: none;
   }
 
   /* Recording state: pulsing orange border, no glow */
@@ -1560,7 +1673,7 @@
 
   .ghost-btn:hover {
     color: var(--color-grey-100);
-    background: var(--color-grey-700);
+    background: var(--color-grey-900);
   }
 
   .settings-backdrop {
