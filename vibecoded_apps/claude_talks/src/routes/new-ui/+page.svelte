@@ -305,7 +305,7 @@
         <a class="redirect-homepage-link" aria-label="Homepage" href="#/" onclick={(e) => { e.preventDefault(); push('/'); }}>
           <img src={reduckLogo} alt="Reduck" width="31" height="31" />
         </a>
-        <button class="sidebar-toggle-btn" type="button" onclick={() => sidebarOpen = !sidebarOpen} aria-label="Collapse sidebar">
+        <button class="sidebar-toggle-btn" type="button" onclick={() => sidebarOpen = !sidebarOpen} aria-label="Collapse sidebar" use:tooltip={'Collapse sidebar'}>
           <!-- sidebar icon -->
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2"/>
@@ -313,7 +313,7 @@
           </svg>
         </button>
       {:else}
-        <button class="expand-sidebar-button" type="button" aria-label="Expand sidebar" onclick={() => sidebarOpen = !sidebarOpen}>
+        <button class="expand-sidebar-button" type="button" aria-label="Expand sidebar" use:tooltip={'Expand sidebar'} onclick={() => sidebarOpen = !sidebarOpen}>
           <img src={reduckLogo} alt="Reduck" width="31" height="31" />
         </button>
       {/if}
@@ -554,7 +554,7 @@
                     <span style="--h: {h}px; animation-delay: {(i * 0.08) % 1.6}s"></span>
                   {/each}
                 </div>
-                <button class="primary-btn stop-btn" title="Stop recording">
+                <button class="primary-btn stop-btn" aria-label="Stop recording" use:tooltip={'Stop recording'}>
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
                     <rect x="6" y="6" width="12" height="12" rx="2"/>
                   </svg>
@@ -566,8 +566,8 @@
                     <span style="--h: {h}px; animation-delay: {(i * 0.08) % 1.6}s"></span>
                   {/each}
                 </div>
-                <button class="text-btn clear-btn" onclick={clearInput}>Clear</button>
-                <button class="primary-btn send-btn" title="Send">
+                <button class="text-btn clear-btn" use:tooltip={'Clear'} onclick={clearInput}>Clear</button>
+                <button class="primary-btn send-btn" aria-label="Send" use:tooltip={'Send'}>
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                     <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
                   </svg>
@@ -575,7 +575,7 @@
               {:else if inputMode === 'streaming'}
                 <!-- Streaming: stop button active -->
                 <span class="controls-spacer"></span>
-                <button class="primary-btn stop-btn" title="Stop">
+                <button class="primary-btn stop-btn" aria-label="Stop" use:tooltip={'Stop'}>
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
                     <rect x="6" y="6" width="12" height="12" rx="2"/>
                   </svg>
@@ -594,7 +594,7 @@
                   </select>
                 </span>
                 {#if inputText.trim()}
-                  <button class="primary-btn send-btn" title="Send">
+                  <button class="primary-btn send-btn" aria-label="Send" use:tooltip={'Send'}>
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                       <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
                     </svg>
