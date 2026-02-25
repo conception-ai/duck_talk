@@ -6,7 +6,6 @@
     name: string;
     summary: string;
     updated_at: string;
-    message_count: number;
   }
 
   let sessions = $state<SessionInfo[]>([]);
@@ -14,6 +13,8 @@
   let error = $state('');
 
   async function loadSessions() {
+    loading = true;
+    error = '';
     try {
       const res = await fetch('/api/sessions');
       if (!res.ok) throw new Error(`${res.status}`);
@@ -24,6 +25,7 @@
       loading = false;
     }
   }
+
   loadSessions();
 
   function relativeTime(iso: string): string {
@@ -56,7 +58,7 @@
         <button class="session-row" onclick={() => push(`/live/${s.id}`)}>
           <div class="session-header">
             <span class="session-name">{s.name}</span>
-            <span class="session-meta">{s.message_count} msgs &middot; {relativeTime(s.updated_at)}</span>
+            <span class="session-meta">{relativeTime(s.updated_at)}</span>
           </div>
           {#if s.summary}
             <p class="session-summary">{s.summary}</p>

@@ -3,46 +3,148 @@
 import glob
 import json
 import logging
-
+import os
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from typing import Literal
-
 from pydantic import BaseModel
 
-from claude_client import (
+from server.claude_client import (
     Claude,
+    ClaudeConfig,
     ContentBlockChunk,
-    ISOLATED_CONFIG,
-    REGULAR_CONFIG,
     TextDelta,
 )
-from models import AssistantEntry, Conversation, UserEntry, preview, fork_session
+from server.models import (
+    AssistantEntry,
+    Conversation,
+    UserEntry,
+    fork_session,
+    path_to_slug,
+    preview,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("api")
 
+# ── Config from env vars ────────────────────────────────────────────────────
+
+config = ClaudeConfig(
+    config_dir=os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude"),
+    cli_path=os.environ.get("CLAUDE_CLI_PATH"),
+)
+
+claude = Claude(config=config)
+
+# ── Project scope (derived from launch cwd) ───────────────────────────────
+
+PROJECT_CWD = os.getcwd()
+PROJECT_SLUG = path_to_slug(PROJECT_CWD)
+
 app = FastAPI()
 
-configs = {
-    "isolated": ISOLATED_CONFIG,
-    "regular": REGULAR_CONFIG,
-}
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-CONFIG_KEY = "isolated"
-config = configs[CONFIG_KEY]
 
-claude = Claude(cwd=config.cwd)
+# ── Helpers ─────────────────────────────────────────────────────────────────
 
-_PROJECT_DIR = config.project_dir
+
+def _projects_root() -> Path:
+    return Path(os.path.expanduser(config.config_dir)) / "projects"
+
+
+def _project_dir() -> Path:
+    return _projects_root() / PROJECT_SLUG
+
+
+def _find_session_file(session_id: str) -> Path | None:
+    """Find a session JSONL in the project directory."""
+    candidate = _project_dir() / f"{session_id}.jsonl"
+    return candidate if candidate.is_file() else None
+
+
+def _load_conversation(session_id: str) -> Conversation:
+    """Resolve session ID to file and load. Raises 404 if not found."""
+    path = _find_session_file(session_id)
+    if not path:
+        raise HTTPException(404, f"Session not found: {session_id}")
+    return Conversation.from_jsonl(str(path))
+
+
+def _read_tail(path: str, nbytes: int = 32768) -> list[dict[str, object]]:
+    """Read last N bytes of a JSONL file, return parsed lines (newest first)."""
+    with open(path, "rb") as f:
+        _ = f.seek(0, 2)
+        size = f.tell()
+        chunk = min(nbytes, size)
+        _ = f.seek(-chunk, 2)
+        tail = f.read().decode(errors="replace")
+    result: list[dict[str, object]] = []
+    for line in reversed(tail.strip().split("\n")):
+        try:
+            result.append(cast(dict[str, object], json.loads(line)))
+        except (json.JSONDecodeError, AttributeError):
+            continue
+    return result
+
+
+def _session_preview(path: str) -> tuple[str, str, str]:
+    """Fast extraction of (name, summary, timestamp) from tail of JSONL.
+
+    Reads last 32KB instead of parsing the full file through Pydantic.
+    Returns (last_user_text, last_assistant_text, timestamp).
+    """
+    entries = _read_tail(path)
+    ts = ""
+    name = ""
+    summary = ""
+    for entry in entries:
+        entry_type = entry.get("type")
+        if not ts:
+            t = entry.get("timestamp")
+            if isinstance(t, str) and t:
+                ts = t
+        if not name and entry_type == "user":
+            msg = entry.get("message")
+            if isinstance(msg, dict):
+                msg_dict = cast(dict[str, object], msg)
+                raw_content = msg_dict.get("content", "")
+                if isinstance(raw_content, str) and raw_content.strip():
+                    name = raw_content.strip()[:200]
+        if not summary and entry_type == "assistant":
+            msg = entry.get("message")
+            if isinstance(msg, dict):
+                msg_dict = cast(dict[str, object], msg)
+                blocks = msg_dict.get("content")
+                if isinstance(blocks, list):
+                    for block_obj in cast(list[object], blocks):
+                        if not isinstance(block_obj, dict):
+                            continue
+                        block = cast(dict[str, object], block_obj)
+                        if block.get("type") == "text":
+                            text_val = block.get("text", "")
+                            if isinstance(text_val, str) and text_val.strip():
+                                summary = text_val.strip()[:300]
+                                break
+        if ts and name and summary:
+            break
+    return name, summary, ts
+
+
+# ── Endpoints ───────────────────────────────────────────────────────────────
 
 
 @app.get("/api/config")
 def get_config() -> dict[str, str]:
-    return {"config": CONFIG_KEY}
+    return {"config_dir": config.config_dir, "project_cwd": PROJECT_CWD}
 
 
 class SessionInfo(BaseModel):
@@ -50,63 +152,38 @@ class SessionInfo(BaseModel):
     name: str
     summary: str
     updated_at: str
-    message_count: int
-
-
-def _last_timestamp(path: str) -> str:
-    """Read last 8KB of a JSONL file, return the most recent entry timestamp."""
-    with open(path, "rb") as f:
-        _ = f.seek(0, 2)
-        size = f.tell()
-        chunk = min(8192, size)
-        _ = f.seek(-chunk, 2)
-        tail = f.read().decode(errors="replace")
-    for line in reversed(tail.strip().split("\n")):
-        try:
-            data: dict[str, object] = cast(dict[str, object], json.loads(line))
-            ts = str(data.get("timestamp", ""))
-            if ts:
-                return ts
-        except (json.JSONDecodeError, AttributeError):
-            continue
-    return ""
 
 
 @app.get("/api/sessions")
 def list_sessions() -> list[SessionInfo]:
-    if not _PROJECT_DIR.is_dir():
+    pdir = _project_dir()
+    if not pdir.is_dir():
         return []
-    files = glob.glob(str(_PROJECT_DIR / "*.jsonl"))
+    files = glob.glob(str(pdir / "*.jsonl"))
 
-    # Fast sort: tail 8KB per file for timestamp (8ms vs 377ms full parse)
-    timestamps = {f: _last_timestamp(f) for f in files}
-    files.sort(key=lambda f: timestamps[f], reverse=True)
-
-    sessions: list[SessionInfo] = []
+    # Single tail read per file: extract name, summary, and timestamp
+    previews: dict[str, tuple[str, str, str]] = {}
+    seen: set[str] = set()
     for f in files:
         sid = Path(f).stem
-        conv = Conversation.from_jsonl(f)
-        name = conv.last_user_message or conv.title
-        if not name:
+        if sid in seen:
             continue
-        sessions.append(
-            SessionInfo(
-                id=sid,
-                name=name,
-                summary=conv.last_assistant_message,
-                updated_at=timestamps[f],
-                message_count=conv.message_count,
-            )
+        seen.add(sid)
+        previews[f] = _session_preview(f)
+
+    # Sort by timestamp descending
+    files = [f for f in previews if previews[f][0]]  # skip empty sessions
+    files.sort(key=lambda f: previews[f][2], reverse=True)
+
+    return [
+        SessionInfo(
+            id=Path(f).stem,
+            name=previews[f][0],
+            summary=previews[f][1],
+            updated_at=previews[f][2],
         )
-    return sessions
-
-
-def _load_conversation(session_id: str) -> Conversation:
-    """Resolve session ID to file and load. Raises 404 if not found."""
-    path = _PROJECT_DIR / f"{session_id}.jsonl"
-    if not path.is_file():
-        raise HTTPException(404, f"Session not found: {session_id}")
-    return Conversation.from_jsonl(str(path))
+        for f in files
+    ]
 
 
 class LeafInfo(BaseModel):
@@ -192,7 +269,7 @@ def get_messages(session_id: str) -> list[MessageResponse]:
         raise HTTPException(404, "No active leaf found")
 
     path = conv.walk_path(active.uuid)
-    path.reverse()  # walk_path returns leaf→root, we want root→leaf
+    path.reverse()
 
     messages: list[MessageResponse] = []
     for entry in path:
@@ -238,15 +315,16 @@ async def converse(body: ConverseRequest) -> StreamingResponse:
         len(body.system_prompt),
     )
 
+    # Fork if rewinding to a specific leaf
     session_id = body.session_id
     should_fork = False
     if body.leaf_uuid and body.session_id:
-        path = _PROJECT_DIR / f"{body.session_id}.jsonl"
-        if path.is_file():
-            session_id = fork_session(str(path), body.leaf_uuid)
+        session_path = _find_session_file(body.session_id)
+        if session_path:
+            session_id = fork_session(str(session_path), body.leaf_uuid)
             should_fork = True
             log.info(
-                "forked session %s → %s at leaf %s",
+                "forked session %s -> %s at leaf %s",
                 body.session_id,
                 session_id,
                 body.leaf_uuid,
@@ -259,6 +337,7 @@ async def converse(body: ConverseRequest) -> StreamingResponse:
             session_id=session_id,
             model=body.model,
             system_prompt=body.system_prompt,
+            cwd=PROJECT_CWD,
             permission_mode=body.permission_mode,
             fork=should_fork,
         ):

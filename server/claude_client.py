@@ -18,65 +18,50 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 
+from server.models import path_to_slug
+
 type PermissionMode = Literal["default", "acceptEdits", "plan", "bypassPermissions"]
 
 log = logging.getLogger("claude")
 
-# ── SDK Isolation (DO NOT REMOVE) ─────────────────────────────────────────────
-#
-# The Claude Agent SDK spawns a `claude` subprocess. When THIS process is itself
-# running inside Claude Code, three isolation layers prevent conflicts:
-#
-# 1. Pop CLAUDECODE env var — without this the child detects a "nested session"
-#    and refuses to start.
-#
-# 2. cli_path → separate binary installed under ~/.claude-sdk/cli/ so the child
-#    doesn't collide with the parent Claude Code instance.
-#    One-time setup:
-#      npm install @anthropic-ai/claude-code --prefix ~/.claude-sdk/cli
-#
-# 3. env with CLAUDE_CONFIG_DIR → separate config/creds/sessions directory.
-#    One-time setup:
-#      CLAUDECODE= CLAUDE_CONFIG_DIR=~/.claude-sdk \
-#        ~/.claude-sdk/cli/node_modules/.bin/claude login
-#
-# 4. PATH must include /opt/homebrew/bin (or wherever `node` lives) because the
-#    CLI shebang is #!/usr/bin/env node. The SDK's `env` parameter REPLACES the
-#    subprocess environment, so without explicitly passing PATH, node is not found
-#    (exit code 127). We merge os.environ + our overrides to preserve PATH.
-#
-# ──────────────────────────────────────────────────────────────────────────────
+# Prevent nested session error when running inside Claude Code
+_ = os.environ.pop("CLAUDECODE", None)
 
-_ = os.environ.pop("CLAUDECODE", None)  # Layer 1: prevent nested session error
 
-_SDK_DIR = os.path.expanduser("~/.claude-sdk")
-_CLI_PATH = os.path.join(_SDK_DIR, "cli/node_modules/.bin/claude")  # Layer 2
-_SDK_ENV = {  # Layers 3 + 4
-    **os.environ,
-    "CLAUDE_CONFIG_DIR": _SDK_DIR,
-    "PATH": f"/opt/homebrew/bin:{os.environ.get('PATH', '')}",
-}
-
-# ── Project paths ────────────────────────────────────────────────────────────
-
-_CWD = "/Users/dhuynh95/claude_talks"
-_PROJECT_SLUG = "-Users-dhuynh95-claude-talks"
+# ── Config ──────────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
 class ClaudeConfig:
-    """Paths for a Claude Code environment (CLI or SDK)."""
+    """Claude Code environment config.
 
-    config_dir: str
-    cwd: str = _CWD
+    Two fields, one method. Built from env vars at server startup.
 
-    @property
-    def project_dir(self) -> Path:
-        return Path(self.config_dir) / "projects" / _PROJECT_SLUG
+    Config loading order (later wins):
+      1. Defaults (~/.claude, claude on PATH)
+      2. .env file in cwd (loaded via python-dotenv)
+      3. Actual env vars (override .env)
+    """
+
+    config_dir: str = "~/.claude"
+    cli_path: str | None = None  # None = `claude` on PATH
+
+    def subprocess_env(self) -> dict[str, str]:
+        """Build env dict for the SDK subprocess."""
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        expanded = os.path.expanduser(self.config_dir)
+        if self.config_dir != "~/.claude":
+            env["CLAUDE_CONFIG_DIR"] = expanded
+        return env
+
+    def project_dir(self, cwd: str) -> Path:
+        """Session directory for a given project cwd."""
+        return (
+            Path(os.path.expanduser(self.config_dir)) / "projects" / path_to_slug(cwd)
+        )
 
 
-REGULAR_CONFIG = ClaudeConfig(config_dir=os.path.expanduser("~/.claude"))
-ISOLATED_CONFIG = ClaudeConfig(config_dir=_SDK_DIR)
+# ── Chunk types ─────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -100,27 +85,21 @@ class Result:
 type Chunk = TextDelta | ContentBlockChunk | Result
 
 
+# ── Client ──────────────────────────────────────────────────────────────────
+
+
 class Claude:
-    """Streaming Claude Code interface with persistent conversation.
+    """Streaming Claude Code interface.
 
-    Uses standalone query() with `resume` to maintain conversation across
-    calls. Each call spawns a fresh subprocess but resumes the same session.
-
-    Usage:
-        claude = Claude()
-        async for chunk in claude.converse("fix the bug"):
-            if isinstance(chunk, TextDelta):
-                print(chunk.text, end="")
-        # Follow-up — Claude remembers context:
-        async for chunk in claude.converse("what did you just do?"):
-            ...
+    Stateless — holds config only. cwd is per-call (different sessions
+    can target different projects).
     """
 
-    _cwd: str
+    _config: ClaudeConfig
     _stderr: Callable[[str], None]
 
-    def __init__(self, cwd: str | None = None):
-        self._cwd = cwd or os.getcwd()
+    def __init__(self, config: ClaudeConfig):
+        self._config = config
         self._stderr = lambda line: log.debug("sdk: %s", line.rstrip())
 
     async def converse(
@@ -128,22 +107,24 @@ class Claude:
         message: str,
         model: str,
         system_prompt: str,
+        cwd: str,
         session_id: str | None = None,
         permission_mode: PermissionMode = "plan",
         fork: bool = False,
     ) -> AsyncIterator[Chunk]:
         options = ClaudeAgentOptions(
             model=model,
-            cwd=self._cwd,
+            cwd=cwd,
             system_prompt=system_prompt,
             include_partial_messages=True,
             permission_mode=permission_mode,
             allowed_tools=["Read", "WebSearch"],
             disallowed_tools=["AskUserQuestion", "Skill"],
-            cli_path=_CLI_PATH,
-            env=_SDK_ENV,
+            env=self._config.subprocess_env(),
             stderr=self._stderr,
         )
+        if self._config.cli_path:
+            options = replace(options, cli_path=self._config.cli_path)
         if session_id:
             options = replace(options, resume=session_id, fork_session=fork)
             log.info("resuming session %s (fork=%s)", session_id, fork)

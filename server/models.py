@@ -33,6 +33,28 @@ from typing import Any, ClassVar, Literal, TypedDict, cast
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter
 
 
+# --- Slug helpers ---
+
+
+def path_to_slug(path: str) -> str:
+    """Convert absolute path to Claude's project slug.
+
+    Matches the CLI's sanitization: everything except [a-zA-Z0-9-] becomes a hyphen.
+    /Users/foo/my_project → -Users-foo-my-project
+    """
+    import os
+    import re
+
+    return re.sub(r"[^a-zA-Z0-9-]", "-", os.path.abspath(path))
+
+
+def slug_to_path(slug: str) -> str:
+    """Best-effort reverse of path_to_slug. Display-only — lossy for paths with hyphens."""
+    # Double-hyphen (--) came from /. (dot-dir like .claude), restore as /.
+    result = "/" + slug.lstrip("-").replace("--", "/.")
+    return result.replace("-", "/")
+
+
 # JSON data (use Any since pydantic can't handle recursive types)
 type JsonDict = dict[str, Any]  # pyright: ignore[reportExplicitAny]
 
@@ -498,9 +520,8 @@ class Session(BaseModel):
         import os
 
         if base_path is None:
-            # Convert cwd to Claude's project path format
-            cwd_path = os.path.abspath(self.cwd).replace("/", "-").lstrip("-")
-            base_path = f"~/.claude/projects/-{cwd_path}"
+            slug = path_to_slug(self.cwd)
+            base_path = f"~/.claude/projects/{slug}"
 
         expanded_path = os.path.expanduser(base_path)
         os.makedirs(expanded_path, exist_ok=True)

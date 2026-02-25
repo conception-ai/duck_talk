@@ -25,7 +25,7 @@ const TTS_PROMPT = 'You are a text-to-speech reader. Read aloud EXACTLY what the
 const GREEN_BADGE = 'background:#059669;color:white;font-weight:bold;padding:1px 6px;border-radius:3px';
 const DIM = 'color:#9ca3af';
 
-export function openTTSSession(apiKey: string): StreamingTTS {
+export function openTTSSession(apiKey: string, onFlush?: (text: string) => void): StreamingTTS {
   const player = createPlayer();
   let session: Session | null = null;
   let closed = false;
@@ -50,7 +50,7 @@ export function openTTSSession(apiKey: string): StreamingTTS {
     });
   }
 
-  const sentenceBuf = createSentenceBuffer(sendText);
+  const sentenceBuf = createSentenceBuffer((text) => { sendText(text); onFlush?.(text); });
 
   // Connect async — buffer text until ready
   const ai = new GoogleGenAI({ apiKey });
