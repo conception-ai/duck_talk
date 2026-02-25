@@ -148,6 +148,7 @@ def _session_preview(path: str) -> tuple[str, str, str]:
     string content is found. Handles long sessions with large tool-result
     entries that push human messages out of a fixed-size window.
     """
+    ts = ""
     nbytes = _TAIL_START
     while nbytes <= _TAIL_MAX:
         entries = _read_tail(path, nbytes)
