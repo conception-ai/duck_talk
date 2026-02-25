@@ -35,6 +35,22 @@ Batch read them all in a single read. You must read context in a single turn.
 | src/shared/types.ts | Backend types — `ContentBlock` union, `SessionEntry`. iOS models must match these |
 | src/shared/models.ts | Session file ops — `Conversation`, `forkSession()`. Needed for edit/back feature |
 
+## Previous frontend files to read for inspiration
+
+| File | Purpose |
+|------|---------|
+| @src/client/routes/live/+page.svelte | 3-zone layout: chat-scroll, dock (transcription/approval + input-bar + waveform), modals |
+| @src/client/routes/live/stores/data.svelte.ts | Two-array model: `messages[]` + `voiceLog[]`. Approval flow, session lifecycle |
+| @src/client/routes/live/stores/ui.svelte.ts | Persistent prefs. `mode`, `apiKey`, `model`, `systemPrompt` |
+| @src/client/routes/live/gemini.ts | Gemini Live orchestration. BLOCKING converse, 3 abort paths, `approvalPending` gate |
+| @src/client/routes/live/tts-session.ts | Persistent TTS. `muted` flag, `pendingSends`, `onFlush` dual consumer |
+| @src/client/routes/live/converse.ts | SSE consumer. `AbortController`, session ID capture from done event |
+| @src/client/routes/live/audio.ts | Mic 16kHz PCM worklet, gapless player 24kHz |
+| @src/client/routes/live/buffer.ts | Sentence-boundary buffer. minChars=40, maxWaitMs=1000 |
+| @src/client/routes/live/voice-approval.ts | `webkitSpeechRecognition` keyword listener. ACCEPT/REJECT/STOP words |
+| @src/client/routes/live/tools.ts | Gemini tool declarations: `converse` + `stop` |
+| @src/client/routes/live/types.ts | Port interfaces: `DataStoreMethods`, `LiveBackend`, `ConverseApi`, `StreamingTTS` |
+
 ## Svelte source files (read when porting a specific component)
 
 | File | iOS target |
