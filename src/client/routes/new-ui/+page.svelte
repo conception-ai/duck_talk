@@ -160,8 +160,8 @@
   function onMicCenterKey(e: KeyboardEvent) {
     // Ignore modifier keys, Tab, Escape, etc.
     if (e.ctrlKey || e.altKey) return;
+    if (e.metaKey) return; // Cmd shortcuts handled by global handler
     if (e.key === 'Tab' || e.key === 'Escape' || e.key === 'Shift') return;
-    // Cmd+M → start live mode (handled by global handler)
     if (e.key === 'Enter') { switchToTyping(); return; }
     // Printable character — switch to typing with that char
     if (e.key.length === 1) {
@@ -227,11 +227,13 @@
     };
   });
 
+  const MIC_SVG = '<svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>';
+
   let inputTip = $derived(
-    inputMode === 'review' ? 'Say <span class="tip-tag">Send</span> or <span class="tip-tag">Clear</span>' :
-    inputMode === 'recording' ? 'Press <span class="tip-tag">ESC</span> to exit Live' :
-    inputMode === 'streaming' ? 'Say <span class="tip-tag">Stop</span> to interrupt' :
-    inputText.trim() ? 'Press Enter to send' :
+    inputMode === 'review' ? `<span class="tt-voice">${MIC_SVG}Send</span> or <span class="tt-voice">${MIC_SVG}Clear</span>` :
+    inputMode === 'recording' ? `<span class="tt-kbd">ESC</span> to exit Live` :
+    inputMode === 'streaming' ? `<span class="tt-kbd">ESC</span> / <span class="tt-voice">${MIC_SVG}Stop</span> to interrupt` :
+    inputText.trim() ? `Press <span class="tt-kbd">Enter</span> to send` :
     `Permission mode: <span class="tip-tag ${permissionMode === 'plan' ? 'tip-info' : 'tip-success'}">${permissionModeLabel}</span> <span class="tip-hint">(shift+tab to switch)</span>`
   );
 
@@ -292,8 +294,6 @@
   }
 
   // Tooltip action — portals a tooltip to <body> on hover (matching Reduck Tooltip)
-  /** Build tooltip HTML with optional keyboard shortcut and voice command */
-  const MIC_SVG = '<svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>';
   function tip(label: string, opts?: { kbd?: string; voice?: string }) {
     if (!opts || (!opts.kbd && !opts.voice)) return label;
     const tags: string[] = [];
@@ -524,6 +524,7 @@
                 oninput={autoGrow}
                 onfocus={onTextareaFocus}
                 onblur={onTextareaBlur}
+                onkeydown={(e) => { if (e.metaKey && e.key === 'm') e.preventDefault(); }}
                 placeholder={currentPlaceholder}
                 class:placeholder-fade={placeholderFade}
                 readonly={inputMode === 'recording' || inputMode === 'streaming'}
@@ -622,7 +623,7 @@
               {:else if inputMode === 'streaming'}
                 <!-- Streaming: stop button active -->
                 <span class="controls-spacer"></span>
-                <button class="primary-btn stop-btn" aria-label="Stop" use:tooltip={tip('Stop', { voice: 'Stop' })}>
+                <button class="primary-btn stop-btn" aria-label="Stop" use:tooltip={tip('Stop', { kbd: 'ESC', voice: 'Stop' })}>
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
                     <rect x="6" y="6" width="12" height="12" rx="2"/>
                   </svg>
@@ -648,7 +649,7 @@
                       </svg>
                     </button>
                   {:else}
-                    <button class="ghost-btn mic-corner-btn" aria-label="Start talking" use:tooltip={tip('Start talking', { kbd: '⌘M' })} onclick={onMicClick}>
+                    <button class="primary-btn mic-corner-btn" aria-label="Start talking" use:tooltip={tip('Start talking', { kbd: '⌘M' })} onclick={onMicClick}>
                       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                         <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
                       </svg>
@@ -1577,6 +1578,14 @@
   }
   .primary-btn.send-btn:hover { background: var(--color-orange-500); }
   .primary-btn.send-btn:active { background: var(--color-orange-600); }
+
+  /* Mic corner: primary orange */
+  .primary-btn.mic-corner-btn {
+    background: var(--color-orange-400);
+    color: var(--color-grey-900);
+  }
+  .primary-btn.mic-corner-btn:hover { background: var(--color-orange-500); }
+  .primary-btn.mic-corner-btn:active { background: var(--color-orange-600); }
 
   /* Mic: ghost type */
   .primary-btn.mic-btn {
