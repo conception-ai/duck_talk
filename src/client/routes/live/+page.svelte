@@ -53,17 +53,26 @@
     },
   });
 
-  // Load session history if route has an ID
+  // Load session history when route ID changes
   let historyLoading = $state(false);
-  if (params?.id) {
+  let loadedSessionId: string | undefined;
+  $effect(() => {
+    const id = params?.id;
+    if (id === loadedSessionId) return;
+    loadedSessionId = id;
+    if (!id) {
+      live.loadHistory([], '');
+      return;
+    }
     historyLoading = true;
-    fetch(`/api/sessions/${params.id}/messages`)
+    fetch(`/api/sessions/${id}/messages`)
       .then((res) => {
         if (!res.ok) throw new Error(`${res.status}`);
         return res.json();
       })
       .then((msgs: Message[]) => {
-        live.loadHistory(msgs, params!.id!);
+        if (params?.id !== id) return; // stale
+        live.loadHistory(msgs, id);
       })
       .catch((e) => {
         console.error('[live] failed to load history:', e);
@@ -71,7 +80,7 @@
       .finally(() => {
         historyLoading = false;
       });
-  }
+  });
 
   let resultMap = $derived(buildToolResultMap(live.messages));
 
