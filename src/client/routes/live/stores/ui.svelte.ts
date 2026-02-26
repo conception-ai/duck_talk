@@ -12,7 +12,6 @@ const STORAGE_KEY = 'claude-talks:ui';
 
 interface Persisted {
   readbackEnabled: boolean;
-  apiKey: string | null;
   mode: InteractionMode;
   model: string;
   systemPrompt: string;
@@ -21,7 +20,6 @@ interface Persisted {
 
 const DEFAULTS: Persisted = {
   readbackEnabled: false,
-  apiKey: null,
   mode: 'direct',
   model: DEFAULT_MODEL,
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
@@ -51,21 +49,13 @@ function save(state: Persisted) {
 export function createUIStore() {
   const persisted = load();
   let readbackEnabled = $state(persisted.readbackEnabled);
-  let apiKey = $state<string | null>(persisted.apiKey);
   let mode = $state<InteractionMode>(persisted.mode);
   let model = $state(persisted.model);
   let systemPrompt = $state(persisted.systemPrompt);
   let permissionMode = $state(persisted.permissionMode);
 
   function persist() {
-    save({ readbackEnabled, apiKey, mode, model, systemPrompt, permissionMode });
-  }
-
-  function setApiKey(key: string) {
-    const trimmed = key.trim();
-    if (!trimmed) return;
-    apiKey = trimmed;
-    persist();
+    save({ readbackEnabled, mode, model, systemPrompt, permissionMode });
   }
 
   function setMode(m: InteractionMode) {
@@ -76,9 +66,7 @@ export function createUIStore() {
   return {
     get readbackEnabled() { return readbackEnabled; },
     setReadbackEnabled(v: boolean) { readbackEnabled = v; persist(); },
-    get apiKey() { return apiKey; },
     get mode() { return mode; },
-    setApiKey,
     setMode,
     get model() { return model; },
     get systemPrompt() { return systemPrompt; },

@@ -178,6 +178,34 @@ export function createDataStore(deps: DataStoreDeps) {
     api.leafUuid = null;
   }
 
+  async function sendText(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    commitUserMessage(trimmed);
+    startTool('text', {});
+    awaitingToolDone = true;
+
+    api.stream(trimmed, {
+      onChunk(chunk) {
+        if (!pendingTool) return;
+        appendTool(chunk);
+      },
+      onBlock(block) {
+        if (!pendingTool) return;
+        appendBlock(block);
+      },
+      onDone() {
+        if (!pendingTool) return;
+        finishTool();
+      },
+      onError(msg) {
+        if (!pendingTool) return;
+        finishTool();
+        pushError(msg);
+      },
+    });
+  }
+
   async function editMessage(messageIndex: number) {
     api.abort();
     pendingTool = null;
@@ -271,6 +299,7 @@ export function createDataStore(deps: DataStoreDeps) {
     setClaudeSession(id: string | null) { api.sessionId = id; },
     loadHistory,
     editMessage,
+    sendText,
     approve,
     reject,
     start,

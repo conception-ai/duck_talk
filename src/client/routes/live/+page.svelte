@@ -18,6 +18,9 @@
     buildToolResultMap,
     isToolResultOnly,
   } from '../../lib/message-helpers';
+  import './styles/colorPalette.css';
+  import './styles/fontSizes.css';
+  import './styles/reduck-theme.css';
 
   setupRecorder();
 
@@ -33,13 +36,13 @@
       systemPrompt: ui.systemPrompt,
       permissionMode: ui.permissionMode,
     })),
-    getApiKey: () => ui.apiKey,
+    getApiKey: () => apiKey,
     getMode: () => ui.mode,
     readbackInstruction: (text: string) => {
       let cancelled = false;
       let stop: (() => void) | undefined;
-      if (!ui.readbackEnabled || !ui.apiKey) return () => {};
-      speak(ui.apiKey, text).then(({ data, sampleRate }) => {
+      if (!ui.readbackEnabled || !apiKey) return () => {};
+      speak(apiKey, text).then(({ data, sampleRate }) => {
         if (cancelled) return;
         stop = playPcmChunks([data], sampleRate).stop;
       }).catch((e) => console.error('[readback]', e));
@@ -69,74 +72,144 @@
 
   let resultMap = $derived(buildToolResultMap(live.messages));
 
-  // --- Backend config name ---
-  let configName = $state('');
-  fetch('/api/config').then(r => r.json()).then(d => { configName = d.config; }).catch(() => {});
+  // --- Server config (Gemini API key) ---
+  let apiKey = $state<string | null>(null);
+  fetch('/api/config').then(r => r.json()).then(d => { apiKey = d.gemini_api_key ?? null; }).catch(() => {});
 
-  // --- Settings modal state ---
-  let settingsOpen = $state(!ui.apiKey);
-  let keyDraft = $state(ui.apiKey ?? '');
-  let readbackDraft = $state(ui.readbackEnabled);
-  let modeDraft = $state<InteractionMode>(ui.mode);
-  let modelDraft = $state(ui.model);
-  let permissionModeDraft = $state(ui.permissionMode);
-  let promptDraft = $state(ui.systemPrompt);
+  // --- InputMode ---
+  type InputMode = 'idle' | 'recording' | 'review' | 'streaming';
+  let inputMode = $derived<InputMode>(
+    live.pendingApproval ? 'review' :
+    live.status === 'connected' ? 'recording' :
+    live.pendingTool?.streaming ? 'streaming' :
+    'idle'
+  );
 
-  function openSettings() {
-    keyDraft = ui.apiKey ?? '';
-    readbackDraft = ui.readbackEnabled;
-    modeDraft = ui.mode;
-    modelDraft = ui.model;
-    permissionModeDraft = ui.permissionMode;
-    promptDraft = ui.systemPrompt;
-    settingsOpen = true;
+  // --- Settings popover ---
+  let settingsOpen = $state(false);
+  let inputMuted = $state(false);
+  let outputMuted = $state(false);
+
+  // Close popover when leaving idle
+  $effect(() => { if (inputMode !== 'idle') settingsOpen = false; });
+
+  // --- Review banner ---
+  let reviewBannerDismissed = $state(false);
+
+  // --- Input text (syncs from store in live modes, user-controlled in idle) ---
+  let inputText = $state('');
+  let textareaEl: HTMLTextAreaElement;
+  let originalApprovalText = $state('');
+
+  // Sync from live transcription during recording
+  $effect(() => {
+    if (live.status === 'connected' && !live.pendingApproval) {
+      inputText = live.pendingInput;
+    }
+  });
+
+  // Sync from approval text
+  $effect(() => {
+    const approval = live.pendingApproval;
+    if (approval) {
+      inputText = approval.instruction;
+      originalApprovalText = approval.instruction;
+      editing = false;
+    }
+  });
+
+  // Clear when disconnecting from live
+  $effect(() => {
+    if (live.status === 'connected') {
+      return () => {
+        inputText = '';
+        editing = false;
+        if (textareaEl) textareaEl.style.height = '';
+      };
+    }
+  });
+
+  // Permission mode label for input tip
+  let permissionModeLabel = $derived(ui.permissionMode === 'plan' ? 'Plan' : 'Accept Edits');
+
+  let inputTip = $derived(
+    inputMode === 'review'
+      ? `Press <span class="tt-kbd">Enter</span> to send`
+      : inputMode === 'recording'
+      ? `<span class="tt-kbd">ESC</span> to exit Live`
+      : inputMode === 'streaming'
+      ? `<span class="tt-kbd">ESC</span> to stop`
+      : inputText.trim()
+      ? `Press <span class="tt-kbd">Enter</span> to send`
+      : `Permission mode: <span class="tip-tag ${ui.permissionMode === 'plan' ? 'tip-info' : 'tip-success'}">${permissionModeLabel}</span> <span class="tip-hint">(shift+tab)</span>`
+  );
+
+  // --- Auto-grow textarea ---
+  function autoGrow() {
+    if (!textareaEl) return;
+    textareaEl.style.height = '';
+    if (!inputText.trim()) return;
+    if (textareaEl.scrollHeight > textareaEl.clientHeight) {
+      const maxH = window.innerHeight * 0.5;
+      textareaEl.style.height = Math.min(textareaEl.scrollHeight, maxH) + 'px';
+    }
   }
 
-  function saveSettings() {
-    if (keyDraft.trim()) ui.setApiKey(keyDraft);
-    if (readbackDraft !== ui.readbackEnabled) ui.setReadbackEnabled(readbackDraft);
-    ui.setMode(modeDraft);
-    ui.setModel(modelDraft);
-    ui.setPermissionMode(permissionModeDraft);
-    ui.setSystemPrompt(promptDraft);
-    settingsOpen = false;
-  }
-
-  // --- Corrections modal ---
-  let correctionsOpen = $state(false);
-
+  // --- Edit message hover ---
   let hoveredMsg = $state<number | null>(null);
   let editing = $state(false);
-  let editDraft = $state('');
 
-  function handleAccept() {
-    if (!live.pendingApproval) return;
-    live.approve();
-  }
-
-  function handleStartEdit() {
-    if (!live.pendingApproval) return;
-    editDraft = live.pendingApproval.instruction;
-    editing = true;
-  }
-
-  function handleSubmitEdit() {
+  // --- Approval handlers ---
+  function handleSendReview() {
     if (!live.pendingApproval) return;
     const original = live.pendingApproval.instruction;
-    if (editDraft !== original) {
-      corrections.add(original, editDraft);
+    if (inputText !== original) {
+      corrections.add(original, inputText);
     }
-    live.approve(editDraft);
+    live.approve(inputText);
     editing = false;
+    reviewBannerDismissed = false;
   }
 
-  function handleCancelEdit() {
-    editing = false;
+  function handleClearReview() {
+    inputText = '';
+    if (textareaEl) textareaEl.focus();
   }
 
   function handleReject() {
     live.reject();
     editing = false;
+    reviewBannerDismissed = false;
+  }
+
+  // --- Send typed text (non-live) ---
+  function handleSendText() {
+    const text = inputText.trim();
+    if (!text) return;
+    inputText = '';
+    if (textareaEl) textareaEl.style.height = '';
+    live.sendText(text);
+  }
+
+  function onTextareaKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (inputMode === 'review') {
+        handleSendReview();
+      } else if (inputMode === 'idle' && inputText.trim()) {
+        handleSendText();
+      }
+    }
+  }
+
+  function onTextareaFocus() {
+    if (inputMode === 'review') editing = true;
+  }
+
+  function onTextareaBlur() {
+    if (inputMode === 'review' && inputText === originalApprovalText) {
+      editing = false;
+    }
   }
 
   // --- Audio-reactive waveform ---
@@ -207,130 +280,223 @@
     e.preventDefault();
     ui.cyclePermissionMode();
   }
+  if (e.key === 'Escape' && (inputMode === 'recording' || inputMode === 'streaming')) {
+    e.preventDefault();
+    live.stop();
+  }
 }} />
 
-<main>
+<main class="reduck-theme">
   <header>
     <button class="header-link" onclick={() => push('/')}>Home</button>
     <span class="spacer"></span>
-    <button class="header-link" onclick={openSettings}>Settings</button>
   </header>
 
   {#if historyLoading}
     <p class="loading">Loading conversation...</p>
   {/if}
 
-  <!-- Zone 1: Chat (scrollable) -->
   <div class="chat-scroll" bind:this={messagesEl}>
-    <div class="chat">
-      {#each live.messages as msg, i}
-        {#if !isToolResultOnly(msg)}
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="bubble {msg.role}"
-               onmouseenter={() => hoveredMsg = i}
-               onmouseleave={() => hoveredMsg = null}>
-            {#if hoveredMsg === i && msg.role === 'user' && msg.uuid && live.status === 'idle'}
-              <button class="edit-btn" onclick={() => live.editMessage(i)}>Edit</button>
-            {/if}
-            {#if msg.role === 'user'}
-              <p>{messageText(msg)}</p>
-            {:else}
-              {#each messageThinking(msg) as think}
-                <details class="thinking">
-                  <summary>Thinking...</summary>
-                  <p>{think}</p>
-                </details>
-              {/each}
-              {#if messageText(msg)}
-                <div class="prose">{@html marked.parse(messageText(msg))}</div>
+    <div class="column">
+      <div class="chat">
+        {#each live.messages as msg, i}
+          {#if !isToolResultOnly(msg)}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="bubble {msg.role}"
+                 onmouseenter={() => hoveredMsg = i}
+                 onmouseleave={() => hoveredMsg = null}>
+              {#if hoveredMsg === i && msg.role === 'user' && msg.uuid && live.status === 'idle'}
+                <button class="edit-btn" onclick={() => live.editMessage(i)}>Edit</button>
               {/if}
-              {#each messageToolUses(msg) as tool}
-                <details class="tool-use">
-                  <summary><span class="tool-pill">{tool.name}</span></summary>
-                  {#if tool.input.instruction}
-                    <p class="tool-args">{tool.input.instruction}</p>
-                  {:else if Object.keys(tool.input).length}
-                    <p class="tool-args">{JSON.stringify(tool.input)}</p>
-                  {/if}
-                  {#if resultMap.get(tool.id)}
-                    <p class="tool-text">{resultMap.get(tool.id)}</p>
-                  {/if}
-                </details>
-              {/each}
+              {#if msg.role === 'user'}
+                <p>{messageText(msg)}</p>
+              {:else}
+                {#each messageThinking(msg) as think}
+                  <details class="thinking">
+                    <summary>Thinking...</summary>
+                    <p>{think}</p>
+                  </details>
+                {/each}
+                {#if messageText(msg)}
+                  <div class="prose">{@html marked.parse(messageText(msg))}</div>
+                {/if}
+                {#each messageToolUses(msg) as tool}
+                  <details class="tool-use">
+                    <summary><span class="tool-pill">{tool.name}</span></summary>
+                    <div class="tool-details">
+                      {#if tool.input.command}
+                        <p class="tool-args">{tool.input.command}</p>
+                      {:else if tool.input.instruction}
+                        <p class="tool-args">{tool.input.instruction}</p>
+                      {:else if Object.keys(tool.input).length}
+                        <p class="tool-args">{JSON.stringify(tool.input)}</p>
+                      {/if}
+                      {#if resultMap.get(tool.id)}
+                        <p class="tool-text">{resultMap.get(tool.id)}</p>
+                      {/if}
+                    </div>
+                  </details>
+                {/each}
+              {/if}
+            </div>
+          {/if}
+        {/each}
+
+        <!-- Streaming Claude response -->
+        {#if live.pendingTool && !live.pendingApproval}
+          <div class="bubble assistant streaming">
+            {#if live.pendingTool.text}
+              <div class="prose">{@html marked.parse(live.pendingTool.text)}</div>
+            {/if}
+            {#if live.pendingTool.streaming}
+              <div class="dots"><span></span><span></span><span></span></div>
             {/if}
           </div>
         {/if}
-      {/each}
-
-      <!-- Streaming Claude response (faded) -->
-      {#if live.pendingTool && !live.pendingApproval}
-        <div class="bubble assistant streaming">
-          {#if live.pendingTool.text}
-            <div class="prose">{@html marked.parse(live.pendingTool.text)}</div>
-          {/if}
-          {#if live.pendingTool.streaming}
-            <div class="dots"><span></span><span></span><span></span></div>
-          {/if}
-        </div>
-      {/if}
-    </div>
-  </div>
-
-  <!-- Zone 2+3: Dock (float + input bar) -->
-  <div class="dock">
-    <!-- Transcription float -->
-    {#if live.pendingInput && live.status === 'connected'}
-      <div class="float transcription">
-        <p>{live.pendingInput}</p>
       </div>
-    {/if}
 
-    <!-- Approval float -->
-    {#if live.pendingApproval}
-      <div class="float approval">
-        <div class="approval-text"><p>{live.pendingApproval.instruction}</p></div>
-        {#if editing}
-          <textarea class="edit-instruction" bind:value={editDraft}></textarea>
-          <div class="approval-actions">
-            <button class="btn-accept" onclick={handleSubmitEdit}>Submit</button>
-            <button class="btn-secondary" onclick={handleCancelEdit}>Cancel</button>
-          </div>
-        {:else}
-          <div class="approval-actions">
-            <button class="btn-accept" onclick={handleAccept}>Accept</button>
-            <button class="btn-secondary" onclick={handleStartEdit}>Edit</button>
-            <button class="btn-reject" onclick={handleReject}>Reject</button>
+      <!-- Unified input area -->
+      <div class="input-area">
+        {#if inputMode === 'review' && !reviewBannerDismissed}
+          <div class="review-banner">
+            <span>Review your message, edit if needed, then send.</span>
+            <button class="review-banner-close" aria-label="Dismiss" onclick={() => reviewBannerDismissed = true}>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                <line x1="7" y1="7" x2="17" y2="17"/><line x1="17" y1="7" x2="7" y2="17"/>
+              </svg>
+            </button>
           </div>
         {/if}
-      </div>
-    {/if}
 
-    <!-- Input bar -->
-    <div class="input-bar">
-      {#if live.status === 'connected'}
-        <div class="waveform">
-          {#each audioLevels as level}
-            <span class="bar" style="height: {4 + level * 24}px"></span>
-          {/each}
+        <div class="input-box" class:recording={inputMode === 'recording'} class:review={inputMode === 'review'} class:streaming={inputMode === 'streaming'} class:editing>
+          <textarea
+            bind:this={textareaEl}
+            bind:value={inputText}
+            oninput={autoGrow}
+            onkeydown={onTextareaKeydown}
+            onfocus={onTextareaFocus}
+            onblur={onTextareaBlur}
+            placeholder={inputMode === 'streaming' ? 'Waiting for response...' : 'Message...'}
+            readonly={inputMode === 'recording' || inputMode === 'streaming'}
+          ></textarea>
+
+          <div class="controls-row">
+            <!-- Settings gear -->
+            <div class="settings-wrapper">
+              <button class="ghost-btn" type="button" aria-label="Settings" onclick={() => settingsOpen = !settingsOpen}>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="3"/>
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                </svg>
+              </button>
+              {#if settingsOpen}
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="settings-backdrop" onclick={() => settingsOpen = false}></div>
+                <div class="settings-popover">
+                  <div class="settings-section">
+                    <span class="settings-section-title">Audio</span>
+                    <label class="settings-toggle">
+                      <span class="settings-label">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="var(--color-grey-400)"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
+                        Input
+                      </span>
+                      <button class="toggle-switch" class:active={!inputMuted} type="button" onclick={() => inputMuted = !inputMuted} aria-label="Toggle input audio">
+                        <span class="toggle-knob"></span>
+                      </button>
+                    </label>
+                    <label class="settings-toggle">
+                      <span class="settings-label">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="var(--color-grey-400)"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+                        Output
+                      </span>
+                      <button class="toggle-switch" class:active={!outputMuted} type="button" onclick={() => outputMuted = !outputMuted} aria-label="Toggle output audio">
+                        <span class="toggle-knob"></span>
+                      </button>
+                    </label>
+                  </div>
+                  <div class="settings-divider"></div>
+                  <div class="settings-section">
+                    <span class="settings-section-title">Transcription Mode</span>
+                    <select class="settings-select" value={ui.mode} onchange={(e) => ui.setMode(e.currentTarget.value as InteractionMode)}>
+                      <option value="direct">Direct</option>
+                      <option value="review">Review</option>
+                    </select>
+                  </div>
+                  <div class="settings-divider"></div>
+                  <div class="settings-section">
+                    <span class="settings-section-title">Permission Mode</span>
+                    <select class="settings-select" value={ui.permissionMode} onchange={(e) => ui.setPermissionMode(e.currentTarget.value)}>
+                      <option value="plan">Plan</option>
+                      <option value="acceptEdits">Accept Edits</option>
+                    </select>
+                  </div>
+                </div>
+              {/if}
+            </div>
+
+            {#if inputMode === 'recording'}
+              <!-- Recording: waveform + stop -->
+              <div class="waveform">
+                {#each audioLevels as level}
+                  <span style="height: {4 + level * 24}px"></span>
+                {/each}
+              </div>
+              <button class="primary-btn stop-btn" aria-label="Exit Live" onclick={() => live.stop()}>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                  <line x1="7" y1="7" x2="17" y2="17"/><line x1="17" y1="7" x2="7" y2="17"/>
+                </svg>
+              </button>
+            {:else if inputMode === 'review'}
+              <!-- Review: waveform + clear + send -->
+              <div class="waveform">
+                {#each audioLevels as level}
+                  <span style="height: {4 + level * 24}px"></span>
+                {/each}
+              </div>
+              <button class="text-btn" onclick={handleClearReview}>Clear</button>
+              <button class="primary-btn send-btn" aria-label="Send" onclick={handleSendReview}>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                </svg>
+              </button>
+            {:else if inputMode === 'streaming'}
+              <!-- Streaming: spacer + stop -->
+              <span class="controls-spacer"></span>
+              <button class="primary-btn stop-btn" aria-label="Stop" onclick={() => live.stop()}>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                  <rect x="6" y="6" width="12" height="12" rx="2"/>
+                </svg>
+              </button>
+            {:else}
+              <!-- Idle: spacer + model + send/mic -->
+              <span class="controls-spacer"></span>
+              <span class="model-select-wrap">
+                <select class="model-select" value={ui.model} onchange={(e) => ui.setModel(e.currentTarget.value)}>
+                  <option value="opus">Opus</option>
+                  <option value="sonnet">Sonnet</option>
+                  <option value="haiku">Haiku</option>
+                </select>
+              </span>
+              {#if inputText.trim()}
+                <button class="primary-btn send-btn" aria-label="Send" onclick={handleSendText}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                  </svg>
+                </button>
+              {:else}
+                <button class="primary-btn mic-corner-btn" aria-label="Start talking" disabled={live.status === 'connecting'} onclick={() => live.start()}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
+                  </svg>
+                </button>
+              {/if}
+            {/if}
+          </div>
         </div>
-        <button class="mic-btn active" onclick={() => live.stop()}>
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-            <rect x="6" y="6" width="12" height="12" rx="2" />
-          </svg>
-        </button>
-      {:else}
-        <span class="placeholder">Reply...</span>
-        <button
-          class="mic-btn"
-          class:pulsing={live.pendingTool?.streaming}
-          disabled={live.status === 'connecting'}
-          onclick={() => live.start()}
-        >
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z" />
-          </svg>
-        </button>
-      {/if}
+
+        <p class="input-tip">{@html inputTip}</p>
+      </div>
     </div>
   </div>
 
@@ -338,124 +504,20 @@
   {#if live.toast}
     <div class="toast">{live.toast}</div>
   {/if}
-
-  <!-- Permission mode -->
-  <button class="mode-status" class:mode-accept={ui.permissionMode !== 'plan'} onclick={() => ui.cyclePermissionMode()}>
-    {ui.permissionMode === 'plan' ? 'plan' : 'accept edits'} (shift+tab to cycle)
-  </button>
 </main>
 
-<!-- Settings modal (consolidated) -->
-{#if settingsOpen}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="backdrop" onkeydown={() => {}} onclick={() => { settingsOpen = false; }}>
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="modal settings-modal" onkeydown={() => {}} onclick={(e) => e.stopPropagation()}>
-      <h2>Settings</h2>
-
-      {#if configName}
-        <div class="config-badge">Config: {configName}</div>
-      {/if}
-
-      <label>
-        API Key
-        <input type="password" placeholder="API key" bind:value={keyDraft} />
-      </label>
-
-      <label>
-        Instruction Readback
-        <select bind:value={readbackDraft}>
-          <option value={true}>On</option>
-          <option value={false}>Off</option>
-        </select>
-      </label>
-
-      <label>
-        Mode
-        <select bind:value={modeDraft}>
-          <option value="direct">Direct</option>
-          <option value="review">Review</option>
-        </select>
-      </label>
-
-      <label>
-        Permission Mode
-        <select bind:value={permissionModeDraft}>
-          <option value="plan">Plan</option>
-          <option value="acceptEdits">Accept Edits</option>
-        </select>
-      </label>
-
-      <label>
-        Model
-        <select bind:value={modelDraft}>
-          <option value="haiku">Haiku</option>
-          <option value="sonnet">Sonnet</option>
-          <option value="opus">Opus</option>
-        </select>
-      </label>
-
-      <label>
-        System Prompt
-        <textarea bind:value={promptDraft} rows="8"></textarea>
-      </label>
-
-      {#if corrections.corrections.length}
-        <div class="corrections-link">
-          <span>Corrections ({corrections.corrections.length})</span>
-          <button class="link-btn" onclick={() => { correctionsOpen = true; }}>View</button>
-        </div>
-      {/if}
-
-      <div class="modal-actions">
-        <button onclick={() => { promptDraft = DEFAULT_SYSTEM_PROMPT; }}>Reset Prompt</button>
-        <button onclick={() => { settingsOpen = false; }}>Cancel</button>
-        <button onclick={saveSettings}>Save</button>
-      </div>
-    </div>
-  </div>
-{/if}
-
-<!-- Corrections modal -->
-{#if correctionsOpen}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="backdrop" onkeydown={() => {}} onclick={() => { correctionsOpen = false; }}>
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="modal" onkeydown={() => {}} onclick={(e) => e.stopPropagation()}>
-      <h2>Corrections</h2>
-      {#each corrections.corrections as c (c.id)}
-        <div class="correction-row">
-          <div class="correction-text">
-            <span class="correction-heard">{c.original}</span>
-            <span class="correction-arrow">-&gt;</span>
-            <span class="correction-meant">{c.corrected}</span>
-          </div>
-          <button class="correction-delete" onclick={() => corrections.remove(c.id)}>x</button>
-        </div>
-      {/each}
-      {#if !corrections.corrections.length}
-        <p class="correction-empty">No corrections yet.</p>
-      {/if}
-      <div class="modal-actions">
-        <button onclick={() => { correctionsOpen = false; }}>Close</button>
-      </div>
-    </div>
-  </div>
-{/if}
-
 <style>
-  /* --- Layout --- */
+  /* === LAYOUT === */
   main {
     width: 100%;
     height: 100dvh;
     display: flex;
     flex-direction: column;
-    font-family: system-ui, -apple-system, sans-serif;
-    background: #fafafa;
-    color: #1a1a1a;
+    font-family: 'Inter', sans-serif;
   }
 
   header {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     padding: 0.5rem 1rem;
@@ -466,50 +528,45 @@
   }
 
   .header-link {
-    font-size: 0.8rem;
-    color: #888;
+    font-size: var(--font-size-small);
+    color: var(--color-grey-400);
     border: none;
     background: none;
     cursor: pointer;
     padding: 0.25rem 0;
+    font-family: inherit;
+    transition: color 200ms;
   }
 
-  .header-link:hover { color: #333; }
+  .header-link:hover { color: var(--color-grey-200); }
   .spacer { flex: 1; }
 
-  /* Global button reset (modals depend on this) */
-  button {
-    padding: 0.5rem 1.5rem;
-    font-size: 0.9rem;
-    cursor: pointer;
-    border: 1px solid currentColor;
-    border-radius: 0.25rem;
-    background: none;
-  }
-
-  button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
   .loading {
-    color: #9ca3af;
+    color: var(--color-grey-400);
     text-align: center;
   }
 
-  /* --- Chat --- */
+  /* === SCROLL + COLUMN === */
   .chat-scroll {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
   }
 
-  .chat {
+  .column {
     max-width: 640px;
     width: 100%;
     margin: 0 auto;
-    padding: 0.5rem 1rem 1rem;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
     box-sizing: border-box;
+  }
+
+  /* === MESSAGES === */
+  .chat {
+    flex: 1;
+    padding: 0.5rem 1rem 1rem;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
@@ -519,12 +576,12 @@
     position: relative;
     max-width: 85%;
     line-height: 1.5;
-    font-size: 0.9rem;
+    font-size: var(--font-size-body);
   }
 
   .bubble.user {
     align-self: flex-end;
-    background: #f0f0f0;
+    background: var(--color-grey-900);
     padding: 0.5rem 0.75rem;
     border-radius: 1rem 1rem 0.25rem 1rem;
   }
@@ -536,51 +593,50 @@
     padding: 0.25rem 0;
   }
 
-  .bubble.streaming {
-    opacity: 0.7;
-  }
+  .bubble.streaming { opacity: 0.7; }
 
-  /* --- Edit --- */
+  /* === EDIT BUTTON === */
   .edit-btn {
     position: absolute;
     top: 0;
     right: 0;
     font-size: 0.65rem;
     padding: 0.15rem 0.5rem;
-    color: #9ca3af;
-    border: 1px solid #e5e7eb;
+    color: var(--color-grey-400);
+    border: 1px solid var(--color-grey-600);
     border-radius: 0.25rem;
-    background: white;
+    background: var(--color-grey-800);
     cursor: pointer;
+    font-family: inherit;
     opacity: 0;
     animation: fade-in 0.15s ease-out forwards;
   }
 
   .edit-btn:hover {
-    color: #dc2626;
-    border-color: #dc2626;
+    color: var(--color-red-300);
+    border-color: var(--color-red-500);
   }
 
   @keyframes fade-in {
     to { opacity: 1; }
   }
 
-  /* --- Markdown prose --- */
+  /* === PROSE === */
   .prose :global(p) { margin: 0.25rem 0; }
   .prose :global(strong) { font-weight: 600; }
   .prose :global(code) {
-    font-size: 0.82rem;
-    background: rgba(0,0,0,0.05);
+    font-size: var(--font-size-small);
+    background: var(--color-grey-700);
     padding: 0.1rem 0.3rem;
     border-radius: 3px;
   }
   .prose :global(pre) {
     margin: 0.4rem 0;
     padding: 0.5rem;
-    background: rgba(0,0,0,0.04);
-    border-radius: 6px;
+    background: var(--color-grey-900);
+    border-radius: 8px;
     overflow-x: auto;
-    font-size: 0.8rem;
+    font-size: var(--font-size-small);
   }
   .prose :global(pre code) { background: none; padding: 0; }
   .prose :global(ol), .prose :global(ul) {
@@ -595,15 +651,18 @@
   .prose :global(blockquote) {
     margin: 0.25rem 0;
     padding-left: 0.75rem;
-    border-left: 3px solid rgba(0,0,0,0.15);
-    color: #6b7280;
+    border-left: 3px solid var(--color-grey-600);
+    color: var(--color-grey-400);
   }
 
-  /* --- Thinking --- */
+  /* === THINKING === */
   .thinking {
-    font-size: 0.8rem;
-    color: #999;
+    font-size: var(--font-size-small);
+    color: var(--color-grey-400);
     margin-bottom: 0.25rem;
+    background: var(--color-grey-700);
+    border-radius: 8px;
+    padding: 0.35rem 0.6rem;
   }
 
   .thinking summary {
@@ -617,7 +676,7 @@
     overflow-y: auto;
   }
 
-  /* --- Tool use --- */
+  /* === TOOL USE === */
   .tool-use {
     margin-top: 0.25rem;
     padding: 0;
@@ -631,51 +690,53 @@
     display: inline-block;
   }
 
-  .tool-use summary::-webkit-details-marker {
-    display: none;
-  }
+  .tool-use summary::-webkit-details-marker { display: none; }
 
   .tool-pill {
-    display: inline-block;
-    font-size: 0.75rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font-size: var(--font-size-caption);
     font-family: monospace;
     padding: 0.15rem 0.5rem;
     border-radius: 1rem;
-    background: #ede9fe;
-    color: #7c3aed;
+    background: var(--color-blue-500-translucent-18);
+    color: var(--color-blue-300);
+    transition: background 200ms;
+  }
+
+  .tool-details {
+    margin-top: 8px;
+    padding-left: 8px;
+    border-left: 2px solid var(--color-blue-500-translucent-18);
   }
 
   .tool-args {
-    font-size: 0.8rem;
+    display: inline;
+    font-size: var(--font-size-small);
     font-style: italic;
-    color: #6b7280;
-    margin: 0.25rem 0 0;
-    padding: 0.4rem 0.6rem;
-    background: #f9fafb;
-    border-radius: 0.25rem;
-    border: 1px solid #e5e7eb;
+    color: var(--color-grey-400);
+    margin: 0;
+    padding: 2px 6px;
+    background: var(--color-grey-900);
+    border-radius: 4px;
   }
 
   .tool-text {
-    font-size: 0.8rem;
+    font-size: var(--font-size-small);
     white-space: pre-wrap;
     max-height: 200px;
     overflow-y: auto;
-    color: #374151;
+    color: var(--color-grey-300);
+    margin-top: 4px;
   }
 
-  /* --- Dots --- */
-  .dots {
-    display: flex;
-    gap: 4px;
-    margin-top: 0.5rem;
-  }
+  /* === DOTS === */
+  .dots { display: flex; gap: 4px; margin-top: 0.5rem; }
 
   .dots span {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: #999;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--color-grey-400);
     animation: dot-pulse 1.4s ease-in-out infinite;
   }
   .dots span:nth-child(2) { animation-delay: 0.2s; }
@@ -686,321 +747,453 @@
     40% { opacity: 1; transform: scale(1); }
   }
 
-  /* --- Dock (bottom area) --- */
-  .dock {
-    flex-shrink: 0;
-    max-width: 640px;
-    width: 100%;
-    margin: 0 auto;
-    padding: 0 0.75rem 0.5rem;
-    box-sizing: border-box;
+  /* === INPUT AREA === */
+  .input-area {
+    position: sticky;
+    bottom: 0;
+    padding: 1rem;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    background: linear-gradient(to bottom, transparent, var(--background-color) 1rem);
   }
 
-  /* --- Float (transcription + approval) --- */
-  .float {
-    padding: 0.6rem 0.75rem;
-    border-radius: 0.75rem;
-    font-size: 0.85rem;
-    animation: slide-up 0.15s ease-out;
-  }
-
-  .float.transcription {
-    background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(12px);
-    border: 1px solid #e0e0e0;
-    color: #555;
-    font-style: italic;
-    display: flex;
-    flex-direction: column-reverse;
-    max-height: 8rem;
-    overflow-y: auto;
-    scrollbar-width: none;
-  }
-
-  .float.transcription::-webkit-scrollbar { display: none; }
-  .float.transcription p { margin: 0; }
-
-  .float.approval {
-    background: white;
-    border: 1.5px solid #059669;
-    color: #1a1a1a;
-  }
-
-  .approval-text {
-    max-height: 6rem;
-    overflow-y: auto;
-    scrollbar-width: none;
-  }
-
-  .approval-text::-webkit-scrollbar { display: none; }
-  .approval-text p { margin: 0; }
-
-  .edit-instruction {
-    width: 100%;
-    box-sizing: border-box;
-    min-height: 3rem;
-    margin-top: 0.5rem;
-    padding: 0.5rem;
-    font-size: 0.85rem;
-    font-family: inherit;
-    border: 1px solid #d1d5db;
-    border-radius: 0.25rem;
-    resize: vertical;
-  }
-
-  .approval-actions {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
-    justify-content: flex-end;
-  }
-
-  .approval-actions button {
-    font-size: 0.8rem;
-    padding: 0.3rem 0.75rem;
-    border-radius: 0.25rem;
-  }
-
-  .btn-accept { color: #059669; border-color: #059669; }
-  .btn-accept:hover { background: #059669; color: white; }
-  .btn-secondary { color: #666; border-color: #ccc; }
-  .btn-reject { color: #dc2626; border-color: #dc2626; }
-  .btn-reject:hover { background: #dc2626; color: white; }
-
-  @keyframes slide-up {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  /* --- Input bar --- */
-  .input-bar {
+  /* === REVIEW BANNER === */
+  .review-banner {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.4rem 0.5rem 0.4rem 0.75rem;
-    background: white;
-    border: 1px solid #e0e0e0;
-    border-radius: 1.5rem;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    justify-content: space-between;
+    background: var(--color-grey-900);
+    color: var(--color-grey-300);
+    font-size: var(--font-size-small);
+    padding: 6px 12px;
+    border-radius: 8px;
+    margin-bottom: 8px;
   }
 
-  .placeholder {
-    flex: 1;
-    font-size: 0.85rem;
-    color: #aaa;
+  .review-banner-close {
+    background: none;
+    border: none;
+    color: var(--color-grey-400);
+    cursor: pointer;
+    padding: 2px;
+    display: flex;
+    align-items: center;
+    transition: color 200ms;
   }
 
-  /* --- Waveform --- */
+  .review-banner-close:hover { color: var(--color-grey-200); }
+
+  /* === INPUT BOX === */
+  .input-box {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    background: transparent;
+    border: 1px solid var(--color-grey-600);
+    border-radius: 16px;
+    min-height: 97px;
+    transition: border-color 200ms, background 200ms;
+  }
+
+  .input-box:hover { border-color: var(--color-grey-500); }
+  .input-box:focus-within { border-color: var(--color-orange-400); }
+
+  .input-box.recording {
+    border-color: var(--color-orange-400);
+    background: rgba(249, 115, 22, 0.15);
+    animation: border-pulse 1.5s ease-in-out infinite;
+  }
+
+  .input-box.review {
+    border-color: var(--color-orange-400);
+    background: rgba(249, 115, 22, 0.15);
+    animation: none;
+  }
+
+  .input-box.recording textarea,
+  .input-box.review textarea {
+    font-style: italic;
+  }
+
+  .input-box.recording textarea {
+    color: var(--color-orange-200);
+    animation: transcription-pulse 2s ease-in-out infinite;
+  }
+
+  .input-box.review.editing textarea {
+    font-style: normal;
+  }
+
+  .input-box.streaming {
+    border-color: var(--color-grey-600);
+  }
+
+  .input-box.streaming:hover,
+  .input-box.streaming:focus-within {
+    border-color: var(--color-grey-600);
+  }
+
+  .input-box.streaming textarea {
+    opacity: 0.5;
+  }
+
+  @keyframes border-pulse {
+    0%, 100% { border-color: var(--color-orange-400); }
+    50% { border-color: var(--color-orange-200); }
+  }
+
+  @keyframes transcription-pulse {
+    0%, 100% { color: var(--color-orange-200); }
+    50% { color: var(--color-orange-300); }
+  }
+
+  /* === TEXTAREA === */
+  textarea {
+    border: 0;
+    outline: 0;
+    box-shadow: none;
+    -webkit-appearance: none;
+    resize: none;
+    field-sizing: content;
+    font-size: var(--font-size-body);
+    font-family: inherit;
+    line-height: 1.5;
+    max-height: 50dvh;
+    overflow-y: auto;
+    background: transparent;
+    color: var(--text-color);
+    padding: 1rem;
+  }
+
+  textarea:focus,
+  textarea:focus-visible {
+    border: 0;
+    outline: 0;
+    box-shadow: none;
+  }
+
+  textarea::placeholder {
+    color: var(--color-grey-400);
+  }
+
+  textarea[readonly] { cursor: default; }
+
+  /* === CONTROLS ROW === */
+  .controls-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    padding: 0.2rem 0.5rem 0.45rem;
+    gap: 8px;
+  }
+
+  .controls-spacer { flex: 1; }
+
+  /* === GHOST BUTTON === */
+  .ghost-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px; min-height: 32px;
+    background: transparent;
+    border: none;
+    color: var(--color-grey-300);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 8px;
+    transition: color 200ms, background 200ms;
+  }
+
+  .ghost-btn:hover {
+    color: var(--color-grey-100);
+    background: var(--color-grey-900);
+  }
+
+  /* === TEXT BUTTON === */
+  .text-btn {
+    background: transparent;
+    border: none;
+    color: var(--color-grey-50);
+    font-size: var(--font-size-small);
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    padding: 0 8px;
+    min-height: 32px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    transition: color 200ms, background 200ms;
+  }
+
+  .text-btn:hover {
+    color: var(--color-red-300);
+    background: var(--color-red-500-translucent-18);
+  }
+
+  /* === PRIMARY BUTTON === */
+  .primary-btn {
+    flex-shrink: 0;
+    min-width: 32px; max-width: 32px;
+    min-height: 32px; max-height: 32px;
+    border-radius: 10px;
+    border: none;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; padding: 0;
+    font-weight: 500;
+    transition: box-shadow 200ms, background 200ms, color 200ms;
+  }
+
+  .primary-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .primary-btn.send-btn {
+    background: var(--color-orange-400);
+    color: var(--color-grey-900);
+  }
+  .primary-btn.send-btn:hover { background: var(--color-orange-500); }
+  .primary-btn.send-btn:active { background: var(--color-orange-600); }
+
+  .primary-btn.mic-corner-btn {
+    background: var(--color-orange-400);
+    color: var(--color-grey-900);
+  }
+  .primary-btn.mic-corner-btn:hover { background: var(--color-orange-500); }
+  .primary-btn.mic-corner-btn:active { background: var(--color-orange-600); }
+
+  .primary-btn.stop-btn {
+    background: var(--color-red-500-translucent-18);
+    color: var(--color-red-300);
+  }
+  .primary-btn.stop-btn:hover { background: var(--color-red-500-translucent-28); }
+  .primary-btn.stop-btn:active { background: var(--color-red-500-translucent-38); }
+
+  /* === MODEL SELECT === */
+  .model-select-wrap {
+    display: inline-flex;
+  }
+
+  .model-select {
+    font-size: var(--font-size-small);
+    font-weight: 500;
+    color: var(--color-grey-400);
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    cursor: pointer;
+    padding: 0.15rem 0.4rem;
+    margin-right: 4px;
+    font-family: inherit;
+    transition: color 200ms;
+  }
+
+  .model-select option {
+    background: var(--color-grey-800);
+    color: var(--text-color);
+  }
+
+  .model-select:hover { color: var(--color-grey-200); }
+
+  /* === WAVEFORM === */
   .waveform {
     flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 3px;
-    padding: 0.2rem 0;
+    height: 24px;
+    overflow: hidden;
   }
 
-  .bar {
-    width: 3px;
-    border-radius: 1.5px;
-    background: #059669;
+  .waveform span {
+    display: block;
+    width: 2px;
+    flex-shrink: 0;
+    border-radius: 1px;
+    background: var(--color-orange-100);
     transition: height 0.1s ease-out;
     min-height: 4px;
   }
 
-  /* --- Mic button --- */
-  .mic-btn {
-    flex-shrink: 0;
-    width: 34px;
-    height: 34px;
-    border-radius: 50%;
-    border: none;
-    background: #eee;
-    color: #666;
-    cursor: pointer;
-    display: flex;
+  /* === INPUT TIP === */
+  .input-tip {
+    margin: 10px 0 0;
+    text-align: center;
+    font-size: var(--font-size-caption);
+    color: var(--color-grey-400);
+  }
+
+  .input-tip :global(.tt-kbd) {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.65rem;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--color-grey-700);
+    color: var(--color-grey-300);
+  }
+
+  .input-tip :global(.tip-tag) {
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0;
-    transition: background 0.15s, color 0.15s;
+    border-radius: 20px;
+    padding: 0 6px;
+    font-weight: 500;
+    line-height: 1.5em;
+    white-space: nowrap;
+    background: var(--color-grey-600);
+    color: var(--color-grey-200);
   }
 
-  .mic-btn:hover { background: #ddd; }
-
-  .mic-btn.active {
-    background: #dc2626;
-    color: white;
+  .input-tip :global(.tip-info) {
+    background: var(--color-blue-500-translucent-18);
+    color: var(--color-blue-300);
   }
 
-  .mic-btn.pulsing {
-    animation: gentle-pulse 2s ease-in-out infinite;
+  .input-tip :global(.tip-success) {
+    background: var(--color-green-500-translucent-18);
+    color: var(--color-green-300);
   }
 
-  @keyframes gentle-pulse {
-    0%, 100% { opacity: 0.5; }
-    50% { opacity: 1; }
+  .input-tip :global(.tip-hint) {
+    color: var(--color-grey-400);
   }
 
-  /* --- Mode status --- */
-  .mode-status {
-    flex-shrink: 0;
-    align-self: center;
-    font-size: 0.7rem;
-    color: #059669;
-    border: none;
-    background: none;
-    padding: 0.25rem 0;
-    cursor: pointer;
+  /* === SETTINGS POPOVER === */
+  .settings-wrapper {
+    position: relative;
   }
 
-  .mode-status:hover { opacity: 0.7; }
-  .mode-status.mode-accept { color: #7c3aed; }
-
-  /* --- Toast --- */
-  .toast {
-    position: fixed;
-    top: 1rem;
-    right: 1rem;
-    max-width: 360px;
-    padding: 0.6rem 1rem;
-    background: #fef2f2;
-    color: #991b1b;
-    border: 1px solid #fecaca;
-    border-radius: 0.5rem;
-    font-size: 0.8rem;
-    line-height: 1.4;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-    animation: toast-in 0.2s ease-out;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-    z-index: 200;
-  }
-
-  @keyframes toast-in {
-    from { opacity: 0; transform: translateY(-0.5rem); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  /* --- Modals --- */
-  .backdrop {
+  .settings-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
+    z-index: var(--z-dropdown);
   }
 
-  .modal {
-    background: white;
-    padding: 1.5rem;
-    border-radius: 0.5rem;
-    width: min(400px, 90vw);
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .modal h2 { margin: 0; font-size: 1.1rem; }
-
-  .modal input {
-    padding: 0.5rem;
-    font-size: 0.9rem;
-    border: 1px solid #d1d5db;
-    border-radius: 0.25rem;
-    width: 100%;
-    box-sizing: border-box;
-  }
-
-  .modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-  }
-
-  .settings-modal { width: min(550px, 90vw); }
-
-  .settings-modal label {
+  .settings-popover {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    background: var(--color-grey-900);
+    border: 1px solid var(--color-grey-600);
+    border-radius: 12px;
+    padding: 12px;
+    min-width: 220px;
+    z-index: var(--z-popover);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.85rem;
+  }
+
+  .settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px 0;
+  }
+
+  .settings-section-title {
+    font-size: var(--font-size-caption);
     font-weight: 600;
+    color: var(--color-grey-400);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
-  .settings-modal select,
-  .settings-modal textarea,
-  .settings-modal input {
-    padding: 0.5rem;
-    font-size: 0.9rem;
-    font-weight: 400;
-    border: 1px solid #d1d5db;
-    border-radius: 0.25rem;
-    width: 100%;
-    box-sizing: border-box;
-    font-family: inherit;
+  .settings-divider {
+    height: 1px;
+    background: var(--color-grey-700);
+    margin: 8px 0;
   }
 
-  .settings-modal textarea {
-    resize: vertical;
-    min-height: 120px;
-  }
-
-  .config-badge {
-    font-size: 0.75rem;
-    color: #6b7280;
-    background: #f3f4f6;
-    padding: 0.3rem 0.6rem;
-    border-radius: 0.25rem;
-    font-family: monospace;
-  }
-
-  .corrections-link {
+  .settings-toggle {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    font-size: 0.85rem;
-    color: #6b7280;
+    cursor: pointer;
   }
 
-  .link-btn {
-    font-size: 0.75rem;
-    padding: 0.2rem 0.8rem;
-    color: #2563eb;
-    border-color: #93c5fd;
-  }
-
-  /* --- Corrections --- */
-  .correction-row {
+  .settings-label {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.4rem 0;
-    border-bottom: 1px solid #f0f0f0;
+    gap: 6px;
+    font-size: var(--font-size-body);
+    color: var(--text-color);
   }
 
-  .correction-text { flex: 1; font-size: 0.85rem; }
-  .correction-heard { text-decoration: line-through; color: #9ca3af; }
-  .correction-arrow { color: #9ca3af; margin: 0 0.25rem; }
-  .correction-meant { color: #059669; }
-
-  .correction-delete {
-    font-size: 0.7rem;
-    padding: 0.2rem 0.5rem;
-    color: #dc2626;
-    border-color: #dc2626;
+  .settings-select {
+    font-size: var(--font-size-body);
+    font-family: inherit;
+    color: var(--text-color);
+    background: var(--color-grey-800);
+    border: 1px solid var(--color-grey-600);
+    border-radius: 8px;
+    padding: 6px 8px;
+    cursor: pointer;
+    transition: border-color 200ms;
   }
 
-  .correction-empty {
-    color: #9ca3af;
-    font-size: 0.85rem;
-    text-align: center;
+  .settings-select:hover { border-color: var(--color-grey-500); }
+
+  .settings-select option {
+    background: var(--color-grey-800);
+    color: var(--text-color);
+  }
+
+  /* === TOGGLE SWITCH === */
+  .toggle-switch {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    border-radius: 10px;
+    border: none;
+    background: var(--color-grey-600);
+    cursor: pointer;
+    padding: 0;
+    transition: background 200ms;
+  }
+
+  .toggle-switch.active {
+    background: var(--color-orange-400);
+  }
+
+  .toggle-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--color-grey-50);
+    transition: transform 200ms;
+  }
+
+  .toggle-switch.active .toggle-knob {
+    transform: translateX(16px);
+  }
+
+  /* === TOAST === */
+  .toast {
+    position: fixed;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 360px;
+    padding: 0.6rem 1rem;
+    background: var(--color-grey-900);
+    color: var(--color-red-300);
+    border: 1px solid var(--color-grey-600);
+    border-radius: 8px;
+    font-size: var(--font-size-small);
+    line-height: 1.4;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    animation: toast-in 200ms ease-out;
+    z-index: var(--z-notification);
+  }
+
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateX(-50%) translateY(-0.5rem); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
   }
 </style>

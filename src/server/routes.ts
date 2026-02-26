@@ -25,6 +25,7 @@ export interface ServerConfig {
   claude: ClaudeConfig;
   cwd: string;
   publicDir?: string; // serve built frontend (production mode)
+  geminiApiKey: string;
 }
 
 export function createApp(cfg: ServerConfig): express.Express {
@@ -57,7 +58,11 @@ export function createApp(cfg: ServerConfig): express.Express {
   // --- GET /api/config ---
 
   app.get('/api/config', (_req: Request, res: Response) => {
-    res.json({ config_dir: cfg.claude.configDir, project_cwd: PROJECT_CWD });
+    res.json({
+      config_dir: cfg.claude.configDir,
+      project_cwd: PROJECT_CWD,
+      gemini_api_key: cfg.geminiApiKey,
+    });
   });
 
   // --- GET /api/sessions ---
@@ -227,6 +232,7 @@ export function createApp(cfg: ServerConfig): express.Express {
     console.info(
       `converse: ${body.instruction?.slice(0, 80)} | model=${body.model} prompt=${body.system_prompt?.length ?? 0} chars`,
     );
+    console.info(`[SYSTEM PROMPT] ${body.system_prompt ?? '(none)'}`);
 
     // Fork if rewinding to a specific leaf
     let sessionId = body.session_id ?? undefined;

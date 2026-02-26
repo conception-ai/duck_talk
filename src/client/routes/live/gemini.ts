@@ -332,11 +332,8 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
     });
     sessionRef = session;
     converseApi.sessionStart = t0;
-    console.log(
-      `%c SYSTEM %c\n${BASE_PROMPT.trim()}`,
-      'background:#6b7280;color:white;font-weight:bold;padding:1px 6px;border-radius:3px',
-      'color:#9ca3af;white-space:pre-wrap',
-    );
+    console.log(`%c GEMINI %c ${ts()} [SYSTEM]`, BLUE_BADGE, DIM);
+    console.log(`%c${BASE_PROMPT.trim()}`, 'color:#9ca3af;white-space:pre-wrap');
 
     return {
       sendRealtimeInput: (input) => { if (!closed && !approvalPending) session.sendRealtimeInput(input); },
