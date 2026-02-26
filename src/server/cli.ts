@@ -78,13 +78,6 @@ const claudeConfig: ClaudeConfig = {
 
 checkPrereqs(claudeConfig);
 
-const geminiApiKey = process.env['GEMINI_API_KEY'];
-if (!geminiApiKey) {
-  console.error('Error: GEMINI_API_KEY not set.');
-  console.error('Set it in your .env file or environment: GEMINI_API_KEY=your-key');
-  process.exit(1);
-}
-
 // Resolve built frontend: works from both src/server/ (dev) and dist/server/ (prod)
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(__dirname, '..', '..', 'dist', 'public');
@@ -93,7 +86,6 @@ const serverConfig: ServerConfig = {
   claude: claudeConfig,
   cwd: process.cwd(),
   publicDir: existsSync(publicDir) ? publicDir : undefined,
-  geminiApiKey,
 };
 
 const app = createApp(serverConfig);

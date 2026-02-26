@@ -25,7 +25,6 @@ export interface ServerConfig {
   claude: ClaudeConfig;
   cwd: string;
   publicDir?: string; // serve built frontend (production mode)
-  geminiApiKey: string;
 }
 
 export function createApp(cfg: ServerConfig): express.Express {
@@ -61,7 +60,6 @@ export function createApp(cfg: ServerConfig): express.Express {
     res.json({
       config_dir: cfg.claude.configDir,
       project_cwd: PROJECT_CWD,
-      gemini_api_key: cfg.geminiApiKey,
     });
   });
 
