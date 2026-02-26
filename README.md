@@ -25,18 +25,29 @@ You will need:
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) on PATH
 - [`ANTHROPIC_API_KEY`](https://console.anthropic.com/) — for Claude Code
-- [`GOOGLE_API_KEY`](https://aistudio.google.com/apikey) — for Gemini voice (free tier works, no credit card needed)
+- [`VITE_GEMINI_API_KEY`](https://aistudio.google.com/apikey) — for Gemini voice (free tier works, no credit card needed)
+
+### Option 1 — npx (fastest)
 
 ```bash
-git clone https://github.com/dhuynh95/claude_talks.git && cd claude_talks
-npm install
-
-# Set up your keys
-cp .env.example .env
-# Edit .env with your API keys
-
-npm run dev
+npx duck_talk
 # Opens http://localhost:8000
+```
+
+Set your API keys as environment variables or in a `.env` file in the current directory:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+VITE_GEMINI_API_KEY=AIza...
+```
+
+### Option 2 — from source
+
+```bash
+git clone https://github.com/dhuynh95/duck_talk.git && cd duck_talk
+npm install
+cp .env.example .env   # then edit with your API keys
+npm run dev
 ```
 
 ## Why
