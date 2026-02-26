@@ -34,7 +34,7 @@ You will need:
 ### Option 1 — npx (fastest)
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-... GEMINI_API_KEY=AIza... npx duck_talk
+ANTHROPIC_API_KEY=sk-ant-... GEMINI_API_KEY=AIza... npx duck-talk
 # Opens http://localhost:8000
 ```
 
