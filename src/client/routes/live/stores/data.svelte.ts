@@ -28,6 +28,8 @@ interface DataStoreDeps {
   api: ConverseApi;
   getApiKey: () => string | null;
   getMode: () => InteractionMode;
+  getInputMuted: () => boolean;
+  getOutputMuted: () => boolean;
   readbackInstruction: (text: string) => () => void;
 }
 
@@ -257,12 +259,14 @@ export function createDataStore(deps: DataStoreDeps) {
       tag: 'live',
       apiKey,
       getMode: deps.getMode,
+      getOutputMuted: deps.getOutputMuted,
       readbackInstruction: deps.readbackInstruction,
     });
     if (!backend) return;
 
     try {
       mic = await audio.startMic((base64) => {
+        if (deps.getInputMuted()) return;
         backend?.sendRealtimeInput({
           audio: { data: base64, mimeType: 'audio/pcm;rate=16000' },
         });

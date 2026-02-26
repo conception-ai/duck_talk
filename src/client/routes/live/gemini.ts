@@ -56,6 +56,7 @@ interface ConnectDeps {
   tag: string;
   apiKey: string;
   getMode: () => InteractionMode;
+  getOutputMuted: () => boolean;
   readbackInstruction: (text: string) => () => void;
 }
 
@@ -74,7 +75,7 @@ export async function connectGemini(deps: ConnectDeps): Promise<LiveBackend | nu
   let closed = false; // hoisted so onclose callback can reach it
   let approvalPending = false; // true during BLOCKING approval hold — gates sendRealtimeInput
   let activeConverse: { abort: () => void } | null = null; // Claude SSE abort handle
-  const tts = openTTSSession(apiKey, (text) => {
+  const tts = openTTSSession(apiKey, deps.getOutputMuted, (text) => {
     if (!closed && sessionRef) {
       sessionRef.sendClientContent({ turns: [{ role: 'model', parts: [{ text }] }], turnComplete: false });
       console.log(`%c GEMINI %c ${ts()} ← ${text.length} chars`, BLUE_BADGE, DIM);
