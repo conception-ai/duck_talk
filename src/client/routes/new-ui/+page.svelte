@@ -35,6 +35,9 @@
   let muted = $state(false);
   let textareaEl: HTMLTextAreaElement;
 
+  // Review banner dismiss
+  let reviewBannerDismissed = $state(false);
+
   // Mic intro (until first use)
   let micHasBeenUsed = $state(false);
 
@@ -147,7 +150,7 @@
 
   // Empty mode: mic-centered vs typing
   let typingMode = $state(false);
-  let showMicCenter = $derived(isEmpty && !inputText.trim());
+  let showMicCenter = $derived(isEmpty && !typingMode && !inputText.trim());
 
   function switchToTyping(initialChar = '') {
     typingMode = true;
@@ -191,6 +194,7 @@
     scenario; // track scenario identity
     typingMode = false;
     statusOverride = null;
+    reviewBannerDismissed = false;
   });
 
   // Sync inputText from scenario state
@@ -290,6 +294,10 @@
   function onTextareaBlur() {
     if (inputMode === 'review' && inputText === originalApprovalText) {
       editing = false;
+    }
+    // Revert to mic-center if empty and no text typed
+    if (isEmpty && !inputText.trim()) {
+      typingMode = false;
     }
   }
 
@@ -504,13 +512,23 @@
 
         <!-- Unified input area -->
         <div class="input-area">
+          {#if inputMode === 'review' && !reviewBannerDismissed}
+            <div class="review-banner">
+              <span>Review your message, edit if needed, then send.</span>
+              <button class="review-banner-close" aria-label="Dismiss" onclick={() => reviewBannerDismissed = true}>
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                  <line x1="7" y1="7" x2="17" y2="17"/><line x1="17" y1="7" x2="7" y2="17"/>
+                </svg>
+              </button>
+            </div>
+          {/if}
           <div class="input-box" class:recording={inputMode === 'recording'} class:review={inputMode === 'review'} class:streaming={inputMode === 'streaming'} class:editing class:mic-center={showMicCenter}>
             {#if showMicCenter}
               <!-- svelte-ignore a11y_autofocus -->
               <input class="mic-center-trap" autofocus onkeydown={onMicCenterKey} />
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div class="mic-center-zone" onclick={() => { document.querySelector<HTMLInputElement>('.mic-center-trap')?.focus(); }}>
+              <div class="mic-center-zone" onclick={() => { switchToTyping(); }}>
                 <button class="mic-center-btn" class:mic-intro={micGlow} aria-label="Start talking" use:tooltip={tip('Start talking', { kbd: '⌘M' })} onclick={(e) => { e.stopPropagation(); onMicClick(); }}>
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                       <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
@@ -1124,21 +1142,20 @@
 
 
   .tool-details {
-    margin-top: 4px;
-    margin-left: 4px;
-    padding: 0.4rem 0.6rem;
+    margin-top: 8px;
+    padding-left: 8px;
     border-left: 2px solid var(--color-blue-500-translucent-18);
-    border-radius: 0 8px 8px 0;
   }
 
   .tool-args {
+    display: inline;
     font-size: var(--font-size-small);
     font-style: italic;
     color: var(--color-grey-400);
     margin: 0;
-    padding: 0.4rem 0.6rem;
+    padding: 2px 6px;
     background: var(--color-grey-900);
-    border-radius: 8px;
+    border-radius: 4px;
   }
 
   .tool-text {
@@ -1176,6 +1193,33 @@
     display: flex;
     flex-direction: column;
     background: linear-gradient(to bottom, transparent, var(--background-color) 1rem);
+  }
+
+  .review-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--color-grey-900);
+    color: var(--color-grey-300);
+    font-size: var(--font-size-small);
+    padding: 6px 12px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+  }
+
+  .review-banner-close {
+    background: none;
+    border: none;
+    color: var(--color-grey-400);
+    cursor: pointer;
+    padding: 2px;
+    display: flex;
+    align-items: center;
+    transition: color 200ms;
+  }
+
+  .review-banner-close:hover {
+    color: var(--color-grey-200);
   }
 
   .input-tip {
@@ -1276,6 +1320,7 @@
     background: transparent;
     border: 1px solid var(--color-grey-600);
     border-radius: 16px;
+    min-height: 97px;
     transition: border-color 200ms, background 200ms;
   }
 
