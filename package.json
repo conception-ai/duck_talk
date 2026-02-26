@@ -1,6 +1,6 @@
 {
   "name": "duck_talk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "Voice interface for Claude Code",
   "bin": {
