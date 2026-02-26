@@ -1,15 +1,21 @@
-# DuckTalk - Realtime Voice Wrapper for Claude Code
+# DuckTalk
 
-DuckTalk is a bidirectional voice wrapper for Claude Code that allows you to talk with minimal(ish) latency.
+Talk to Claude Code. Hear it talk back. Approve, interrupt, or redirect — all by voice, from anywhere.
 
-The key technology behind DuckTalk is a generic voice wrapper that can take any black box Agent (aka a multi turn LLM that receives inputs from users, ) and wrap it to add capabilities:
-- Speech to Text (STT): users can **talk** to their agent
-- Text to Speech (TTS): agents can **talk** back to their user
+The core tech: a generic a voice layer that can wrap **any** black-box agent using Live Speech models (e.g. Gemini Live, OpenAI Realtime) for low latency conversations. No modifications to the agent.
 
+```
+              DuckTalk            Claude Code
+              ┌──────┐          ╔══════════════╗
+You ─speech─▶ │ STT  │ ─inst─▶  ║              ║
+    ◀─audio── │ TTS  │ ◀─txt──  ║  (any agent) ║
+              └──────┘          ╚══════════════╝
+
+inst = instruction, e.g. "What is the latest PR?"
+txt = raw stream of tokens 
+```
 
 ## Demo
-
-//
 
 
 
@@ -18,8 +24,8 @@ The key technology behind DuckTalk is a generic voice wrapper that can take any 
 You will need:
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) on PATH
-- `ANTHROPIC_API_KEY` — for Claude Code
-- `GOOGLE_API_KEY` — for Gemini voice (STT/TTS) 
+- [`ANTHROPIC_API_KEY`](https://console.anthropic.com/) — for Claude Code
+- [`GOOGLE_API_KEY`](https://aistudio.google.com/apikey) — for Gemini voice (free tier works, no credit card needed)
 
 ```bash
 git clone https://github.com/dhuynh95/claude_talks.git && cd claude_talks
@@ -33,31 +39,88 @@ npm run dev
 # Opens http://localhost:8000
 ```
 
-## Why DuckTalk
+## Why
 
-I always wanted to have a Realtime Coding Assistant that I could talk to on a walk to see what is going and brainstorm with plans, which have become my main bottleneck.
+I wanted a coding assistant I could talk to on a walk — check on
+a long-running task, brainstorm architecture, review a plan.
+Hands-free, conversational, no laptop required.
 
-So what's the issue with other approaches?
+STT tools like [SuperWhisper](https://superwhisper.com/) and
+[Wispr Flow](https://wisprflow.ai/) get you halfway — you can
+dictate, but the agent never talks back. You can bolt TTS onto
+Claude Code via MCP, but you're waiting for the full response
+before hearing anything.
 
+Voice-native agents like ChatGPT and Gemini Live have the
+conversation part down, but they're not connected to your codebase.
+They can't run commands, edit files, or see your project. And if
+your accent trips up the STT — "Cloud Code" instead of
+"Claude Code" — there's no way to catch it before it's sent.
 
-## How it works
+Nothing combines all of this:
 
-Gemini handles real-time voice I/O (speech-to-text, voice activity detection, interruption). Claude Code handles the actual coding work. The chat UI shows messages, tool calls, and markdown — voice is the primary input but everything is visible.
+|  | Multi turn voice | Audio output | Low latency | No context bloat | Setup |
+|---|---|---|---|---|---|
+| **STT dictation** | ❌ Push-to-talk | ❌ | ❌ No response | ✅ | ✅ |
+| **MCP voice tool** | ❌ Keyboard | ✅ | ❌ After completion | ❌ Extra MCP | ❌ Custom MCP |
+| **DuckTalk** | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-**Two-agent split.** Gemini = ears and mouth, Claude = brain. Gemini Live acts as a transparent relay — it listens via WebSocket, transcribes speech, and calls a `converse` tool that forwards instructions to Claude Code. Claude's streamed response is spoken aloud via a persistent TTS session (a second Gemini connection) and displayed in the chat simultaneously.
+## Key features
 
-**Session management.** State lives in Claude Code's native JSONL files — no separate database. You can browse past sessions, resume them, and rewind (fork) to any message.
-
-**Review mode.** Optional approval step — hear the instruction read back before it goes to Claude. Accept, edit, or reject by voice or UI buttons.
+- **Real-time voice** — talk to Claude Code hands-free. Say "stop" to interrupt mid-response.
+- **Streaming TTS** — responses spoken sentence-by-sentence as they stream. ~1.5s to first audio, not after completion.
+- **Review mode** — hear your instruction read back before it's sent. Accept, edit, or reject by voice or buttons. No more "Cloud Code" when you said "Claude Code."
+- **Correction learning** — edit a misheard instruction, the diff is saved. Future transcriptions auto-correct.
+- **Session management** — browse, resume, and rewind conversations. Built on Claude Code's native JSONL format.
 
 ## Architecture
 
-**Key design decisions:**
+Two Gemini Live sessions — one listens, one speaks. Claude Code
+is the black box in between.
 
-- **Persistent TTS session** — one Gemini Live connection stays open for TTS across multiple converse calls. ~1.5s first-audio latency. Sentence-boundary buffering for natural speech cadence.
-- **BLOCKING converse tool** — Gemini freezes when it calls `converse`, gets unblocked immediately. Claude's response text is injected back into Gemini's context via `sendClientContent` at the same cadence as TTS audio.
-- **Fork-based rewind** — to "go back" in conversation, a new JSONL is created with only the path up to that message. Claude Code's native session format, no custom persistence.
-- **Port-based DI** — stores take injectable interfaces (`AudioPort`, `ConverseApi`, `LiveBackend`) so components stay testable without Gemini/Claude dependencies.
+```mermaid
+graph LR
+    You((You))
+    STT["Gemini Live #1<br/>STT · VAD · Tools"]
+    API["Express Server<br/>+ Agent SDK"]
+    TTS["Gemini Live #2<br/>Streaming TTS"]
+    CC[["Claude Code<br/>(any agent)"]]
+
+    You -->|speech| STT
+    STT -->|instruction| API
+    API <-->|text stream| CC
+    API -->|sentences| TTS
+    TTS -->|audio| You
+    API -.->|context inject| STT
+```
+
+**Flow of a single instruction:**
+
+```mermaid
+sequenceDiagram
+    actor You
+    participant STT as Gemini Live<br/>(STT · VAD)
+    participant API as Express Server
+    participant CC as Claude Code
+    participant TTS as TTS Session
+
+    You->>STT: 🎤 speech
+    Note over STT: VAD detects end of speech
+    STT->>API: converse(instruction)
+    Note over STT: ⏸ frozen (BLOCKING tool)
+    STT-->>STT: tool response → unfreeze
+
+    API->>CC: query(instruction)
+
+    loop text streaming
+        CC-->>API: text chunk (SSE)
+        API-->>TTS: sentence buffer flush
+        TTS-->>You: 🔊 audio
+        API-->>STT: context inject
+    end
+
+    Note over TTS: audio drains
+```
 
 ## License
 
