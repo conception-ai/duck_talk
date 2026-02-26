@@ -1061,7 +1061,7 @@
     overflow-y: auto;
     background: transparent;
     color: var(--text-color);
-    padding: 1rem;
+    padding: 1rem 1.15rem;
   }
 
   textarea:focus,
@@ -1082,7 +1082,7 @@
     position: relative;
     display: flex;
     align-items: center;
-    padding: 0.2rem 0.5rem 0.45rem;
+    padding: 0.35rem 0.75rem 0.55rem;
     gap: 8px;
   }
 
