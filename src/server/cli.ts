@@ -113,18 +113,26 @@ function startServer(attemptPort: number, attempt: number): void {
     }
 
     if (!noBrowser) {
-      setTimeout(() => {
-        const url = `http://localhost:${attemptPort}`;
-        try {
-          execSync(`open ${url}`, { stdio: 'ignore' });
-        } catch {
-          // open not available on all platforms
-        }
-      }, 1500);
+      const url = `http://localhost:${attemptPort}`;
+      try {
+        execSync(`open ${url}`, { stdio: 'ignore' });
+      } catch {
+        // open not available on all platforms
+      }
     }
+
+    // Graceful shutdown — prevents zombie processes holding ports
+    const shutdown = () => {
+      console.info('\nShutting down...');
+      server.close(() => process.exit(0));
+      setTimeout(() => process.exit(1), 3000);
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
   });
 
   server.on('error', (err: NodeJS.ErrnoException) => {
+    server.close();
     if (err.code === 'EADDRINUSE' && attempt < MAX_PORT_ATTEMPTS) {
       startServer(attemptPort + 1, attempt + 1);
     } else {
